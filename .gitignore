@@ -1,0 +1,36 @@
+# Data files
+*.docx
+*.pdf
+*.xlsx
+*.xlsm
+*.jpeg
+*.tmp
+
+# Temp Word files
+~$*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Auth
+users.json
+
+# Uploads
+uploads/
+
+# Node
+node_modules/
+
+# Skills
+.agents/
+skills-lock.json
+
+# Design artifacts
+tcn_design_philosophy.md
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db
