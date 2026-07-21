@@ -1,1270 +1,1763 @@
-import streamlit as st
+"""TCN Grid Outage Manager — 330kV / 132kV Equipment Outage Analytics.
+
+Rebuilt around TCN_330kV_132kV_Outages_Compiled.xlsx:
+Region | SubRegion_ACC | Substation | Equipment | Date_Off | Hour_Off | Minute_Off |
+Date_On | Hour_On | Minute_On | Duration | Class | Last_Load_MW | Event_Indication |
+Party_Responsible | Weather_Condition | Remarks
+"""
+
+import base64
+import hashlib
+import json
+import re
+from datetime import timedelta
+from io import BytesIO
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from pathlib import Path
-from datetime import datetime, timedelta, date
-import re
-import io
-import json
-import hashlib
-import base64
-import shutil
-from equipment_data import (
-    SUBSTATION_EQUIPMENT, EQUIPMENT_TYPES,
-    get_substations_for, get_equipment_types_for, get_equipment_list,
+import streamlit as st
+
+# ──────────────────────────────────────────────────────────────
+# Paths & constants
+# ──────────────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent
+DATA_FILE = BASE_DIR / "TCN_330kV_132kV_Outages_Compiled.xlsx"
+HIERARCHY_FILE = BASE_DIR / "Complete List of Substation.xlsx"
+CATALOG_330_FILE = BASE_DIR / "330kV Transformers and Lines.xlsx"
+CATALOG_132_FILE = BASE_DIR / "132kV Transformesr Capacity and 33kV Feeders - Copy.xlsx"
+STATION_MAP_FILE = BASE_DIR / "station_region_map.csv"
+USERS_FILE = BASE_DIR / "users.json"
+LOGIN_BG = BASE_DIR / "login_bg.png"
+APP_BG = BASE_DIR / "tcn_background.png"
+LOGO = BASE_DIR / "tcn_logo.png"
+
+TCN_RED = "#c81e28"
+TCN_BLUE = "#1e3a7a"
+TCN_COLORS = [TCN_BLUE, TCN_RED, "#1F6C9F", "#E06E6A", "#7DA3D8", "#956400", "#346538", "#8A8580"]
+TCN_RED_SCALE = [[0, "#FBEAEA"], [0.5, "#E06E6A"], [1, TCN_RED]]
+
+CLASS_COLORS = {"Forced": TCN_RED, "Emergency": "#956400", "Planned": TCN_BLUE}
+VOLTAGE_COLORS = {"330kV": TCN_RED, "132kV": TCN_BLUE, "Other": "#8A8580"}
+PARTY_COLORS = {
+    "TCN": TCN_BLUE, "Weather": "#1F6C9F", "Disco": "#956400",
+    "Generation Company": "#346538", "Vandalism": TCN_RED,
+}
+ETYPE_COLORS = {
+    "Line": TCN_BLUE, "Transformer": TCN_RED, "Reactor": "#956400",
+    "Bus": "#346538", "Feeder": "#1F6C9F", "Grid Event": "#8A8580",
+}
+
+TCN_CHART_LAYOUT = dict(
+    font=dict(family="Source Sans Pro, sans-serif", size=12, color="#37352F"),
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+    margin=dict(l=10, r=10, t=48, b=10),
+    title_font=dict(size=14, color="#37352F"),
+    bargap=0.25,
+    hoverlabel=dict(
+        bgcolor="rgba(30, 47, 92, 0.92)",
+        bordercolor="rgba(255,255,255,0.15)",
+        font=dict(size=12, color="white"),
+    ),
 )
 
-st.set_page_config(
-    page_title="TCN Outage Attributes Manager",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ── Logo + Background styling ──────────────────────────────────────────────
-_logo_path = Path(__file__).parent / "tcn_logo.png"
-_logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode() if _logo_path.exists() else ""
-_login_bg_path = Path(__file__).parent / "login_bg.png"
-_login_bg_b64 = base64.b64encode(_login_bg_path.read_bytes()).decode() if _login_bg_path.exists() else ""
-_bg_path = Path(__file__).parent / "tcn_background.png"
-if _bg_path.exists():
-    _bg_b64 = base64.b64encode(_bg_path.read_bytes()).decode()
-    st.markdown(f"""<style>
-    /* ── Impeccable Design Tokens ──────────────────────────────────── */
-    /* Product register: Restrained color strategy. OKLCH tinted neutrals. */
-    /* No pure black/white. Neutrals tinted toward brand blue hue (250). */
-    :root {{
-        /* Easing: ease-out-quart for natural deceleration (Emil + Impeccable) */
-        --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
-        --ease-out-quart: cubic-bezier(0.165, 0.84, 0.44, 1);
-        --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-
-        /* Tinted neutrals toward brand blue (hue 250) */
-        --neutral-950: oklch(12% 0.01 250);
-        --neutral-900: oklch(18% 0.008 250);
-        --neutral-700: oklch(35% 0.008 250);
-        --neutral-500: oklch(55% 0.006 250);
-        --neutral-300: oklch(78% 0.005 250);
-        --neutral-200: oklch(88% 0.004 250);
-        --neutral-100: oklch(94% 0.003 250);
-        --neutral-50: oklch(97.5% 0.002 250);
-
-        /* Brand: TCN institutional blue + signal red */
-        --brand-primary: oklch(32% 0.12 250);
-        --brand-primary-light: oklch(42% 0.10 250);
-        --brand-accent: oklch(48% 0.18 25);
-        --brand-accent-hover: oklch(42% 0.20 25);
-
-        /* Semantic */
-        --surface-primary: oklch(97.5% 0.002 250);
-        --surface-elevated: oklch(99% 0.002 250);
-        --surface-sidebar: oklch(28% 0.10 250);
-        --border-subtle: oklch(88% 0.005 250);
-        --border-sidebar-input: oklch(50% 0.04 250);
-        --text-primary: oklch(18% 0.008 250);
-        --text-secondary: oklch(45% 0.006 250);
-        --text-on-dark: oklch(95% 0.003 250);
-    }}
-
-    /* ── Base App ──────────────────────────────────────────────────── */
-    .stApp {{
-        background-image: url("data:image/png;base64,{_bg_b64}");
-        background-size: cover;
-        background-position: center;
-        background-attachment: fixed;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    }}
-    .stApp > header {{
-        background: transparent;
-    }}
-
-    /* ── Sidebar ───────────────────────────────────────────────────── */
-    /* No side-stripe border (Impeccable absolute ban). Full surface color. */
-    [data-testid="stSidebar"] {{
-        background: var(--surface-sidebar);
-    }}
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] .stMarkdown,
-    [data-testid="stSidebar"] .stMarkdown p,
-    [data-testid="stSidebar"] .stMarkdown strong,
-    [data-testid="stSidebar"] h1,
-    [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] {{
-        color: var(--text-on-dark) !important;
-    }}
-
-    /* Sidebar date inputs */
-    [data-testid="stSidebar"] [data-testid="stDateInput"] input {{
-        background: transparent !important;
-        color: var(--text-on-dark) !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"] {{
-        background: oklch(35% 0.06 250) !important;
-        border: 1px solid var(--border-sidebar-input) !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"] * {{
-        color: var(--text-on-dark) !important;
-    }}
-
-    /* Sidebar search input */
-    [data-testid="stSidebar"] [data-testid="stTextInputRootElement"] {{
-        background: oklch(35% 0.06 250) !important;
-        border: 1px solid var(--border-sidebar-input) !important;
-        border-radius: 6px;
-    }}
-    [data-testid="stSidebar"] [data-testid="stTextInputRootElement"] input {{
-        background: transparent !important;
-        color: var(--text-on-dark) !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stTextInputRootElement"] input::placeholder {{
-        color: oklch(70% 0.01 250) !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stTextInputRootElement"] [data-baseweb="base-input"],
-    [data-testid="stSidebar"] [data-testid="stTextInputRootElement"] [data-baseweb="input"] {{
-        background: transparent !important;
-        border: none !important;
-    }}
-
-    /* Sidebar logout button */
-    [data-testid="stSidebar"] .stButton button {{
-        background: var(--brand-accent) !important;
-        color: var(--text-on-dark) !important;
-        border: none !important;
-        font-weight: 500;
-    }}
-    [data-testid="stSidebar"] .stButton button:hover {{
-        background: var(--brand-accent-hover) !important;
-    }}
-
-    /* Sidebar multiselect */
-    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] {{
-        background: oklch(95% 0.003 250) !important;
-    }}
-    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] {{
-        background: var(--brand-primary) !important;
-    }}
-    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] span {{
-        color: var(--text-on-dark) !important;
-    }}
-    [data-testid="stSidebar"] .stMultiSelect input {{
-        color: var(--text-primary) !important;
-    }}
-    [data-testid="stSidebar"] [data-baseweb="popover"] * {{
-        color: var(--text-primary) !important;
-    }}
-
-    /* ── Tabs ──────────────────────────────────────────────────────── */
-    .stTabs [data-baseweb="tab-list"] {{
-        background: oklch(96% 0.002 250);
-        border: 1px solid oklch(90% 0.004 250);
-        border-radius: 8px;
-        padding: 3px;
-    }}
-    .stTabs [data-baseweb="tab"] {{
-        color: var(--text-secondary);
-        font-weight: 500;
-        border-radius: 6px;
-        transition: color 150ms var(--ease-out-quart),
-                    background 150ms var(--ease-out-quart) !important;
-    }}
-    .stTabs [data-baseweb="tab"]:hover {{
-        color: var(--brand-primary) !important;
-        background: oklch(98% 0.002 250);
-    }}
-    .stTabs [aria-selected="true"] {{
-        color: var(--brand-accent) !important;
-        background: var(--surface-elevated) !important;
-        border-bottom: 2px solid var(--brand-accent);
-        font-weight: 600;
-        box-shadow: 0 1px 3px oklch(32% 0.06 250 / 0.06);
-    }}
-    .stTabs [data-baseweb="tab"]:active {{
-        transform: scale(0.98);
-    }}
-
-    /* ── Forms (Double-Bezel) ─────────────────────────────────────── */
-    /* No glassmorphism (Impeccable absolute ban). Nested shell architecture. */
-    [data-testid="stForm"] {{
-        background: oklch(96% 0.002 250);
-        border: 1px solid oklch(90% 0.004 250);
-        border-radius: 12px;
-        padding: 4px;
-        transition: box-shadow 250ms var(--ease-out-quart) !important;
-    }}
-    [data-testid="stForm"] > div {{
-        background: var(--surface-elevated);
-        border-radius: 9px;
-        padding: 1.5rem;
-        box-shadow: inset 0 1px 1px oklch(100% 0 0 / 0.5);
-    }}
-    [data-testid="stForm"]:hover {{
-        box-shadow: 0 4px 20px oklch(32% 0.06 250 / 0.05),
-                    0 1px 3px oklch(32% 0.06 250 / 0.03) !important;
-    }}
-
-    /* ── Metric Cards (Double-Bezel Architecture) ───────────────── */
-    /* Outer shell + inner core for machined-hardware depth feel. */
-    .stMetric {{
-        background: oklch(96% 0.002 250);
-        border: 1px solid oklch(90% 0.004 250);
-        border-radius: 10px;
-        padding: 3px;
-        transition: box-shadow 250ms var(--ease-out-quart) !important;
-    }}
-    .stMetric > div {{
-        background: var(--surface-elevated);
-        border-radius: 8px;
-        padding: 0.75rem 1rem;
-        box-shadow: inset 0 1px 1px oklch(100% 0 0 / 0.6);
-    }}
-    .stMetric:hover {{
-        box-shadow: 0 4px 20px oklch(32% 0.06 250 / 0.06),
-                    0 1px 3px oklch(32% 0.06 250 / 0.04) !important;
-    }}
-    .stMetric label {{
-        color: var(--text-secondary) !important;
-        font-weight: 500;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }}
-    .stMetric [data-testid="stMetricValue"] {{
-        color: var(--text-primary) !important;
-        font-weight: 600;
-        font-family: "SF Mono", "Geist Mono", "JetBrains Mono", "Cascadia Code", ui-monospace, monospace !important;
-        letter-spacing: -0.01em;
-    }}
-    /* Staggered entry animation for metric cards */
-    @keyframes metricFadeUp {{
-        from {{ opacity: 0; transform: translateY(10px); }}
-        to {{ opacity: 1; transform: translateY(0); }}
-    }}
-    [data-testid="stHorizontalBlock"] > div:nth-child(1) .stMetric {{ animation: metricFadeUp 500ms var(--ease-out-quart) both; animation-delay: 0ms; }}
-    [data-testid="stHorizontalBlock"] > div:nth-child(2) .stMetric {{ animation: metricFadeUp 500ms var(--ease-out-quart) both; animation-delay: 60ms; }}
-    [data-testid="stHorizontalBlock"] > div:nth-child(3) .stMetric {{ animation: metricFadeUp 500ms var(--ease-out-quart) both; animation-delay: 120ms; }}
-    [data-testid="stHorizontalBlock"] > div:nth-child(4) .stMetric {{ animation: metricFadeUp 500ms var(--ease-out-quart) both; animation-delay: 180ms; }}
-    [data-testid="stHorizontalBlock"] > div:nth-child(5) .stMetric {{ animation: metricFadeUp 500ms var(--ease-out-quart) both; animation-delay: 240ms; }}
-
-    /* ── Main Content Focus States ────────────────────────────────── */
-    [data-testid="stTextInputRootElement"]:focus-within,
-    [data-testid="stNumberInputContainer"]:focus-within,
-    [data-baseweb="select"]:focus-within {{
-        outline: 2px solid oklch(50% 0.10 250 / 0.35);
-        outline-offset: 1px;
-        border-radius: 6px;
-        transition: outline 150ms var(--ease-out-quart) !important;
-    }}
-
-    /* ── Plotly Modebar ────────────────────────────────────────────── */
-    /* Hide modebar by default; show on chart hover for clean presentation. */
-    .modebar {{
-        opacity: 0 !important;
-        transition: opacity 200ms var(--ease-out-quart) !important;
-    }}
-    [data-testid="stPlotlyChart"]:hover .modebar {{
-        opacity: 1 !important;
-    }}
-
-    /* ── Buttons: Press Feedback ───────────────────────────────────── */
-    /* 150-250ms, ease-out-quart. scale(0.97) on :active. */
-    .stButton button {{
-        transition: transform 150ms var(--ease-out-quart),
-                    box-shadow 200ms var(--ease-out-quart),
-                    background 200ms var(--ease-out-quart) !important;
-    }}
-    .stButton button:active {{
-        transform: scale(0.97) !important;
-    }}
-    .stButton button:hover {{
-        box-shadow: 0 2px 12px oklch(32% 0.06 250 / 0.08) !important;
-    }}
-    [data-testid="stSidebar"] .stButton button:active {{
-        transform: scale(0.97) !important;
-    }}
-
-    /* ── Download Buttons ──────────────────────────────────────────── */
-    .stDownloadButton button {{
-        transition: transform 150ms var(--ease-out-quart),
-                    box-shadow 200ms var(--ease-out-quart) !important;
-    }}
-    .stDownloadButton button:active {{
-        transform: scale(0.97) !important;
-    }}
-
-    /* ── Sidebar Focus States ──────────────────────────────────────── */
-    [data-testid="stSidebar"] [data-testid="stTextInputRootElement"]:focus-within {{
-        border-color: oklch(60% 0.08 250) !important;
-        box-shadow: 0 0 0 2px oklch(50% 0.08 250 / 0.2) !important;
-        transition: border-color 150ms var(--ease-out-quart),
-                    box-shadow 150ms var(--ease-out-quart) !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stDateInput"] [data-baseweb="input"]:focus-within {{
-        border-color: oklch(60% 0.08 250) !important;
-        box-shadow: 0 0 0 2px oklch(50% 0.08 250 / 0.2) !important;
-        transition: border-color 150ms var(--ease-out-quart),
-                    box-shadow 150ms var(--ease-out-quart) !important;
-    }}
-
-    /* ── Multiselect Tags ──────────────────────────────────────────── */
-    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] {{
-        transition: opacity 100ms var(--ease-out-quart) !important;
-    }}
-
-    /* ── Data Tables (Double-Bezel) ────────────────────────────────── */
-    [data-testid="stDataFrame"] {{
-        background: oklch(96% 0.002 250);
-        border: 1px solid oklch(90% 0.004 250);
-        border-radius: 10px;
-        padding: 3px;
-        overflow: hidden;
-        transition: box-shadow 250ms var(--ease-out-quart) !important;
-    }}
-    [data-testid="stDataFrame"] > div {{
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: inset 0 1px 1px oklch(100% 0 0 / 0.4);
-    }}
-    [data-testid="stDataFrame"]:hover {{
-        box-shadow: 0 4px 20px oklch(32% 0.06 250 / 0.05),
-                    0 1px 3px oklch(32% 0.06 250 / 0.03) !important;
-    }}
-
-    /* ── Chart Containers (Double-Bezel) ─────────────────────────── */
-    [data-testid="stPlotlyChart"] {{
-        background: oklch(96% 0.002 250);
-        border: 1px solid oklch(90% 0.004 250);
-        border-radius: 12px;
-        padding: 4px;
-        transition: box-shadow 250ms var(--ease-out-quart) !important;
-    }}
-    [data-testid="stPlotlyChart"] > div {{
-        background: var(--surface-elevated);
-        border-radius: 9px;
-        box-shadow: inset 0 1px 1px oklch(100% 0 0 / 0.5);
-    }}
-    [data-testid="stPlotlyChart"]:hover {{
-        box-shadow: 0 4px 24px oklch(32% 0.06 250 / 0.05),
-                    0 1px 4px oklch(32% 0.06 250 / 0.03) !important;
-    }}
-
-    /* ── Expanders ─────────────────────────────────────────────────── */
-    [data-testid="stExpander"] {{
-        border-radius: 10px;
-        overflow: hidden;
-        transition: box-shadow 250ms var(--ease-out-quart) !important;
-    }}
-    [data-testid="stExpander"]:hover {{
-        box-shadow: 0 4px 16px oklch(32% 0.06 250 / 0.05) !important;
-    }}
-
-    /* ── File Uploader ─────────────────────────────────────────────── */
-    [data-testid="stFileUploader"] {{
-        border-radius: 8px;
-    }}
-
-    /* ── Skeleton Shimmer (Loading States) ─────────────────────────── */
-    @keyframes shimmer {{
-        0% {{ background-position: -200% 0; }}
-        100% {{ background-position: 200% 0; }}
-    }}
-    .stSpinner > div {{
-        background: linear-gradient(
-            90deg,
-            oklch(95% 0.002 250) 25%,
-            oklch(90% 0.003 250) 50%,
-            oklch(95% 0.002 250) 75%
-        );
-        background-size: 200% 100%;
-        animation: shimmer 1.8s var(--ease-in-out) infinite;
-        border-radius: 6px;
-    }}
-
-    /* ── Scrollbar (Refined) ───────────────────────────────────────── */
-    ::-webkit-scrollbar {{
-        width: 6px;
-        height: 6px;
-    }}
-    ::-webkit-scrollbar-track {{
-        background: transparent;
-    }}
-    ::-webkit-scrollbar-thumb {{
-        background: oklch(78% 0.005 250);
-        border-radius: 3px;
-    }}
-    ::-webkit-scrollbar-thumb:hover {{
-        background: oklch(65% 0.006 250);
-    }}
-    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb {{
-        background: oklch(45% 0.04 250);
-    }}
-
-    /* ── Accessibility: Reduced Motion ─────────────────────────────── */
-    @media (prefers-reduced-motion: reduce) {{
-        *, *::before, *::after {{
-            transition-duration: 0.01ms !important;
-            animation-duration: 0.01ms !important;
-        }}
-        .stMetric:hover {{
-            transform: none !important;
-        }}
-    }}
-    </style>""", unsafe_allow_html=True)
-
-# ── Authentication ──────────────────────────────────────────────────────────
-USERS_FILE = Path(__file__).parent / "users.json"
+st.set_page_config(page_title="TCN Grid Outage Manager", page_icon="⚡", layout="wide")
 
 
-def _hash_pw(pw: str) -> str:
+# ──────────────────────────────────────────────────────────────
+# Small helpers
+# ──────────────────────────────────────────────────────────────
+def _b64(path: Path) -> str:
+    try:
+        return base64.b64encode(path.read_bytes()).decode()
+    except Exception:
+        return ""
+
+
+def _hash(pw: str) -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
 
-def _load_users() -> dict:
+def _style_chart(fig):
+    fig.update_xaxes(showgrid=False, zeroline=False)
+    fig.update_yaxes(gridcolor="rgba(55,53,47,0.08)", zeroline=False)
+    return fig
+
+
+def _eyebrow(text, bg="#E8EEF7", fg=TCN_BLUE):
+    st.markdown(
+        f'<span style="display:inline-block;font-size:0.68rem;font-weight:700;'
+        f'letter-spacing:0.08em;text-transform:uppercase;padding:3px 10px;'
+        f'border-radius:5px;background:{bg};color:{fg};">{text}</span>',
+        unsafe_allow_html=True,
+    )
+
+
+ICONS = {
+    "bolt": '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+    "clock": '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    "power": '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
+    "building": '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+    "pulse": '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+    "alert": '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    "tower": '<path d="M12 2v20"/><path d="M6 22l6-14 6 14"/><path d="M8 12h8"/>',
+    "chart": '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+}
+
+
+def kpi_card(label, value, unit="", icon="bolt", color=TCN_BLUE):
+    unit_html = (
+        f'<span style="font-size:0.7rem;color:var(--text-tertiary);margin-left:3px;">{unit}</span>'
+        if unit else ""
+    )
+    r, g, b = tuple(int(color.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    return f"""<div class="kpi-card"><div class="kpi-card-inner">
+        <div class="kpi-left">
+            <div class="kpi-icon" style="background:linear-gradient(135deg,rgba({r},{g},{b},0.12),rgba({r},{g},{b},0.05));">
+                <svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{ICONS[icon]}</svg>
+            </div>
+            <div><div class="kpi-label">{label}</div><div class="kpi-value">{value}{unit_html}</div></div>
+        </div>
+    </div></div>"""
+
+
+def kpi_grid(cards):
+    n = len(cards)
+    st.markdown(
+        f'<div class="kpi-grid" style="grid-template-columns: repeat({n}, 1fr);">{"".join(cards)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+# CSS
+# ──────────────────────────────────────────────────────────────
+def inject_css():
+    bg64 = _b64(APP_BG)
+    bg_rule = (
+        f'.stApp {{ background: linear-gradient(rgba(248,249,252,0.94), rgba(248,249,252,0.94)), '
+        f'url("data:image/png;base64,{bg64}") center/cover fixed; }}'
+        if bg64 else ".stApp { background: #f8f9fc; }"
+    )
+    st.markdown(f"""<style>
+    @import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+    :root {{
+        --text-primary: #37352F;
+        --text-secondary: #787774;
+        --text-tertiary: #9B9A97;
+        --tcn-red: {TCN_RED};
+        --tcn-blue: {TCN_BLUE};
+        --surface: #FFFFFF;
+        --border: rgba(55,53,47,0.09);
+        --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    }}
+    {bg_rule}
+    html, body, [class*="css"] {{ font-family: 'Source Sans Pro', sans-serif; }}
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {{
+        background: linear-gradient(180deg, #0a1630 0%, #0e1c3d 45%, {TCN_BLUE} 140%);
+        border-right: 1px solid rgba(255,255,255,0.06);
+    }}
+    [data-testid="stSidebar"] * {{ color: #E8ECF5 !important; }}
+    [data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,0.15); }}
+
+    /* Filters header */
+    .flt-header {{
+        display: flex; align-items: center; gap: 0.7rem;
+        margin: 1.1rem 0 0.9rem 0; padding: 0.85rem 0.9rem;
+        background: linear-gradient(135deg, rgba(200,30,40,0.22), rgba(255,255,255,0.05) 65%);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 14px;
+    }}
+    .flt-icon {{
+        width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(135deg, {TCN_RED}, #8f1620);
+        box-shadow: 0 2px 8px rgba(200,30,40,0.4);
+    }}
+    .flt-icon svg {{ width: 17px; height: 17px; }}
+    .flt-title {{ font-size: 1.02rem; font-weight: 700; line-height: 1.2; }}
+    .flt-sub {{ font-size: 0.68rem; color: #9FB0D6 !important; letter-spacing: 0.04em; }}
+
+    /* Filter widget labels */
+    [data-testid="stSidebar"] .stMultiSelect label p,
+    [data-testid="stSidebar"] .stDateInput label p {{
+        font-size: 0.7rem !important; font-weight: 700 !important;
+        text-transform: uppercase; letter-spacing: 0.09em;
+        color: #9FB0D6 !important;
+    }}
+
+    /* Glassy inputs */
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div,
+    [data-testid="stSidebar"] .stDateInput [data-baseweb="input"] {{
+        background: rgba(255,255,255,0.07) !important;
+        border: 1px solid rgba(255,255,255,0.16) !important;
+        border-radius: 12px !important;
+        transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+    }}
+    [data-testid="stSidebar"] .stDateInput input {{ background: transparent !important; }}
+    [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div:hover,
+    [data-testid="stSidebar"] .stDateInput [data-baseweb="input"]:hover {{
+        border-color: rgba(255,255,255,0.38) !important;
+        background: rgba(255,255,255,0.11) !important;
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.05);
+    }}
+
+    /* Tag pills — color-coded per filter */
+    [data-testid="stSidebar"] span[data-baseweb="tag"] {{
+        border-radius: 8px !important; font-weight: 600;
+        border: none !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15);
+        transition: transform 0.2s var(--ease-spring);
+    }}
+    [data-testid="stSidebar"] span[data-baseweb="tag"]:hover {{ transform: translateY(-1px); }}
+    .st-key-flt_region span[data-baseweb="tag"] {{
+        background: linear-gradient(135deg, #2a4a94, {TCN_BLUE}) !important;
+    }}
+    .st-key-flt_voltage span[data-baseweb="tag"] {{
+        background: linear-gradient(135deg, #d43a44, #9c1620) !important;
+    }}
+    .st-key-flt_class span[data-baseweb="tag"] {{
+        background: linear-gradient(135deg, #b07a10, #7d5606) !important;
+    }}
+    .st-key-flt_etype span[data-baseweb="tag"] {{
+        background: linear-gradient(135deg, #3f7a45, #2a5230) !important;
+    }}
+
+    /* Record count badge */
+    .flt-count {{
+        margin-top: 1.2rem; padding: 0.9rem 1rem;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 14px;
+    }}
+    .flt-count-num {{
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 1.45rem; font-weight: 600; line-height: 1.1;
+    }}
+    .flt-count-label {{
+        font-size: 0.68rem; color: #9FB0D6 !important;
+        letter-spacing: 0.04em; margin: 2px 0 8px 0;
+    }}
+    .flt-count-bar {{
+        height: 5px; border-radius: 99px; overflow: hidden;
+        background: rgba(255,255,255,0.1);
+    }}
+    .flt-count-fill {{
+        height: 100%; border-radius: 99px;
+        background: linear-gradient(90deg, {TCN_RED}, #ff7a6b);
+        transition: width 0.6s ease;
+    }}
+
+    /* KPI cards */
+    .kpi-grid {{ display: grid; gap: 0.8rem; margin: 0.6rem 0 1.1rem 0; }}
+    .kpi-card {{
+        position: relative; background: var(--surface); border-radius: 14px;
+        border: 1px solid var(--border);
+        box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.04);
+        overflow: hidden;
+        transition: transform 0.35s var(--ease-spring), box-shadow 0.35s ease;
+    }}
+    .kpi-card::before {{
+        content: ""; position: absolute; inset: 0; border-radius: 14px; padding: 1px;
+        background: linear-gradient(135deg, rgba(30,58,122,0.25), rgba(200,30,40,0.12), transparent 60%);
+        -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor; mask-composite: exclude;
+        pointer-events: none;
+    }}
+    .kpi-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 8px rgba(16,24,40,0.06), 0 12px 24px rgba(16,24,40,0.08); }}
+    .kpi-card-inner {{ display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.1rem; }}
+    .kpi-left {{ display: flex; align-items: center; gap: 0.75rem; }}
+    .kpi-icon {{
+        width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+    }}
+    .kpi-icon svg {{ width: 20px; height: 20px; }}
+    .kpi-label {{
+        font-size: 0.66rem; font-weight: 700; letter-spacing: 0.07em;
+        text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 2px;
+    }}
+    .kpi-value {{
+        font-family: 'JetBrains Mono', monospace; font-size: 1.35rem;
+        font-weight: 600; color: var(--text-primary); line-height: 1.15;
+    }}
+
+    /* Dashboard header */
+    .dash-header {{ display: flex; align-items: center; justify-content: space-between; margin: 0.4rem 0 0.2rem 0; }}
+    .dash-title {{ font-size: 1.9rem; font-weight: 700; color: var(--text-primary); margin: 0; }}
+    .dash-sub {{ font-size: 0.85rem; color: var(--text-secondary); }}
+    .live-badge {{
+        display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 600;
+        color: #346538; background: #EDF3EC; padding: 4px 11px; border-radius: 999px;
+    }}
+    .live-dot {{
+        width: 7px; height: 7px; border-radius: 50%; background: #4CAF50;
+        animation: pulse 1.8s infinite;
+    }}
+    @keyframes pulse {{ 0%,100% {{ opacity: 1; }} 50% {{ opacity: 0.35; }} }}
+
+    /* Tabs — bold pill navigation */
+    .stTabs [data-baseweb="tab-list"] {{
+        background: var(--surface);
+        border-radius: 16px;
+        padding: 6px;
+        border: 1px solid var(--border);
+        box-shadow: 0 1px 2px rgba(16,24,40,0.05), 0 4px 14px rgba(16,24,40,0.05);
+        gap: 4px;
+        flex-wrap: wrap;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        border-radius: 11px;
+        padding: 0.55rem 1.15rem;
+        height: auto;
+        background: transparent;
+        transition: background 0.25s ease, box-shadow 0.25s ease,
+                    transform 0.3s var(--ease-spring);
+    }}
+    .stTabs [data-baseweb="tab"] p {{
+        font-weight: 700 !important;
+        font-size: 0.88rem !important;
+        letter-spacing: 0.015em;
+        color: var(--text-secondary);
+        transition: color 0.25s ease;
+        white-space: nowrap;
+    }}
+    .stTabs [data-baseweb="tab"]:hover {{
+        background: #F1F4FA;
+        transform: translateY(-1px);
+    }}
+    .stTabs [data-baseweb="tab"]:hover p {{ color: var(--tcn-blue); }}
+    .stTabs [aria-selected="true"] {{
+        background: linear-gradient(135deg, {TCN_BLUE} 0%, #142a5c 100%) !important;
+        box-shadow: 0 2px 10px rgba(30,58,122,0.35), inset 0 1px 0 rgba(255,255,255,0.12);
+    }}
+    .stTabs [aria-selected="true"]:hover {{ transform: none; }}
+    .stTabs [aria-selected="true"] p {{ color: #FFFFFF !important; }}
+    .stTabs [data-baseweb="tab-highlight"] {{ display: none; }}
+    .stTabs [data-baseweb="tab-border"] {{ display: none; }}
+
+    /* Buttons */
+    .stButton > button[kind="primary"] {{
+        background: {TCN_RED}; border: none; border-radius: 9px; font-weight: 600;
+    }}
+    header[data-testid="stHeader"] {{ background: transparent; }}
+    </style>""", unsafe_allow_html=True)
+
+
+# ──────────────────────────────────────────────────────────────
+# Auth
+# ──────────────────────────────────────────────────────────────
+def load_users():
     if USERS_FILE.exists():
         return json.loads(USERS_FILE.read_text())
-    default = {
-        "admin": {"password": _hash_pw("admin123"), "role": "admin", "name": "Administrator"},
-        "operator": {"password": _hash_pw("tcn2024"), "role": "operator", "name": "TCN Operator"},
-    }
-    USERS_FILE.write_text(json.dumps(default, indent=2))
-    return default
+    users = {"admin": {"password": _hash("admin123"), "role": "admin",
+                       "name": "Administrator", "region": None}}
+    USERS_FILE.write_text(json.dumps(users, indent=2))
+    return users
 
 
-def _save_users(users: dict):
+def save_users(users):
     USERS_FILE.write_text(json.dumps(users, indent=2))
 
 
-def show_login():
-    # Inject login-specific background that covers the app background
-    st.markdown(f"""
-    <style>
-        /* Login page background (Taste-refined) */
-        /* Minimalist-UI: desaturated imagery, muted tones, no oversaturated stock feel */
-        /* Design-taste: VISUAL_DENSITY=4 (airy), max 1 accent, saturation < 80% */
+def login_page():
+    bg64 = _b64(LOGIN_BG)
+    logo64 = _b64(LOGO)
+    bg_css = (
+        f'background: linear-gradient(rgba(6,12,30,0.60), rgba(6,12,30,0.72)), '
+        f'url("data:image/png;base64,{bg64}") center/cover fixed !important;'
+        if bg64 else
+        "background: linear-gradient(160deg, #0a1630, #1e3a7a) !important;"
+    )
+    st.markdown(f"""<style>
+    .stApp {{ {bg_css} }}
+    header[data-testid="stHeader"] {{ background: transparent; }}
 
-        /* Hide the default app background on login */
-        .stApp {{
-            background-image: none !important;
-            background-color: #060c1e !important;
-        }}
+    /* Logo ring */
+    .login-logo {{
+        width: 96px; height: 96px; margin: 1.6rem auto 0 auto;
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,0.94);
+        border: 1px solid rgba(255,255,255,0.35);
+        box-shadow:
+            0 0 0 8px rgba(255,255,255,0.07),
+            0 0 0 16px rgba(255,255,255,0.035),
+            0 8px 32px rgba(200,30,40,0.35);
+        animation: logo-glow 3.5s ease-in-out infinite;
+    }}
+    @keyframes logo-glow {{
+        0%, 100% {{ box-shadow: 0 0 0 8px rgba(255,255,255,0.07), 0 0 0 16px rgba(255,255,255,0.035), 0 8px 32px rgba(200,30,40,0.35); }}
+        50% {{ box-shadow: 0 0 0 8px rgba(255,255,255,0.10), 0 0 0 16px rgba(255,255,255,0.05), 0 8px 44px rgba(200,30,40,0.55); }}
+    }}
+    .login-logo img {{ width: 64px; }}
 
-        /* Isolated background layer: desaturated + darkened, content unaffected */
-        .stApp::before {{
-            content: "";
-            position: fixed;
-            inset: 0;
-            background-image: url("data:image/png;base64,{_login_bg_b64}");
-            background-size: cover;
-            background-position: center 40%;
-            /* Desaturate bokeh, editorial muting — brightened per user request */
-            filter: saturate(0.45) brightness(0.82) contrast(1.08);
-            z-index: 0;
-            pointer-events: none;
-        }}
+    .login-title {{
+        text-align: center; color: white; font-size: 2.1rem; font-weight: 700;
+        margin: 0.9rem 0 0.1rem 0; letter-spacing: -0.01em;
+        text-shadow: 0 2px 18px rgba(0,0,0,0.45);
+    }}
+    .login-sub {{
+        text-align: center; color: rgba(255,255,255,0.72); font-size: 0.72rem;
+        font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase;
+        margin-bottom: 1.1rem;
+    }}
+    .login-sub .dot {{ color: {TCN_RED}; font-weight: 700; }}
 
-        /* Gradient overlay + subtle film grain on top of desaturated photo */
-        .stApp::after {{
-            content: "";
-            position: fixed;
-            inset: 0;
-            background:
-                /* Film grain at 3% — taste: "opacity 0.04 warm grain to blend" */
-                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E"),
-                /* Editorial gradient: brand navy, lighter overlay */
-                linear-gradient(
-                    180deg,
-                    rgba(6, 12, 30, 0.15) 0%,
-                    rgba(6, 12, 30, 0.35) 45%,
-                    rgba(5, 10, 25, 0.65) 100%
-                );
-            z-index: 0;
-            pointer-events: none;
-        }}
+    /* Glass card with gradient border */
+    [data-testid="stForm"] {{
+        position: relative;
+        background: linear-gradient(160deg, rgba(22,35,70,0.62), rgba(14,24,50,0.55));
+        backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+        border: 1px solid rgba(255,255,255,0.16);
+        border-radius: 22px;
+        padding: 1.9rem 1.8rem 1.6rem 1.8rem;
+        box-shadow: 0 24px 64px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.12);
+    }}
+    [data-testid="stForm"] label p {{
+        color: #C9D4EE !important; font-size: 0.7rem !important; font-weight: 700 !important;
+        text-transform: uppercase; letter-spacing: 0.1em;
+    }}
+    [data-testid="stForm"] [data-baseweb="input"] {{
+        background: rgba(255,255,255,0.09) !important;
+        border: 1px solid rgba(255,255,255,0.18) !important;
+        border-radius: 12px !important;
+        transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+    }}
+    [data-testid="stForm"] [data-baseweb="input"]:hover {{
+        border-color: rgba(255,255,255,0.4) !important;
+        background: rgba(255,255,255,0.13) !important;
+    }}
+    [data-testid="stForm"] [data-baseweb="input"]:focus-within {{
+        border-color: rgba(224,110,106,0.85) !important;
+        box-shadow: 0 0 0 3px rgba(200,30,40,0.25) !important;
+    }}
+    [data-testid="stForm"] [data-baseweb="base-input"] {{ background: transparent !important; }}
+    [data-testid="stForm"] input {{ background: transparent !important; color: white !important; }}
+    [data-testid="stForm"] input::placeholder {{ color: rgba(255,255,255,0.45) !important; }}
 
-        /* Content above both layers */
-        .stApp > * {{ position: relative; z-index: 1; }}
-        /* Login form card: double-bezel, restrained frosted surface */
-        /* Taste: no heavy glassmorphism, ultra-diffuse, subtle inner highlight */
-        [data-testid="stForm"] {{
-            background: rgba(255, 255, 255, 0.04) !important;
-            backdrop-filter: blur(24px) !important;
-            -webkit-backdrop-filter: blur(24px) !important;
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 16px !important;
-            padding: 4px !important;
-            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25),
-                        0 1px 3px rgba(0, 0, 0, 0.15) !important;
-        }}
-        [data-testid="stForm"] > div {{
-            background: rgba(255, 255, 255, 0.03) !important;
-            border-radius: 13px !important;
-            padding: 1.75rem !important;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
-        }}
-        /* Login form labels and inputs: light text on dark */
-        [data-testid="stForm"] label,
-        [data-testid="stForm"] [data-testid="stWidgetLabel"],
-        [data-testid="stForm"] .stTextInput label,
-        [data-testid="stForm"] .stMarkdown p {{
-            color: rgba(255, 255, 255, 0.75) !important;
-        }}
-        [data-testid="stForm"] input,
-        [data-testid="stForm"] [data-baseweb="input"] input,
-        [data-testid="stForm"] [data-baseweb="base-input"] input {{
-            background: rgba(255, 255, 255, 0.08) !important;
-            border: none !important;
-            color: #ffffff !important;
-        }}
-        [data-testid="stForm"] [data-baseweb="input"],
-        [data-testid="stForm"] [data-baseweb="base-input"],
-        [data-testid="stForm"] [data-testid="stTextInputRootElement"],
-        [data-testid="stForm"] [data-testid="stTextInputRootElement"] > div {{
-            background: rgba(255, 255, 255, 0.08) !important;
-            border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            border-radius: 8px !important;
-        }}
-        [data-testid="stForm"] input::placeholder {{
-            color: rgba(255, 255, 255, 0.35) !important;
-        }}
-        [data-testid="stForm"] [data-testid="stTextInputRootElement"]:focus-within,
-        [data-testid="stForm"] [data-baseweb="input"]:focus-within {{
-            border-color: rgba(100, 160, 255, 0.5) !important;
-            box-shadow: 0 0 0 2px rgba(100, 160, 255, 0.15) !important;
-            outline: none !important;
-        }}
-        /* Password eye icon */
-        [data-testid="stForm"] button[kind="icon"],
-        [data-testid="stForm"] [data-testid="stTextInputRootElement"] button {{
-            color: rgba(255, 255, 255, 0.5) !important;
-        }}
-    </style>
-    """, unsafe_allow_html=True)
+    /* Password reveal (eye) button — keep it subtle */
+    [data-testid="stForm"] [data-baseweb="input"] button {{
+        background: transparent !important; border: none !important;
+        box-shadow: none !important;
+    }}
+    [data-testid="stForm"] [data-baseweb="input"] button svg {{ fill: rgba(255,255,255,0.6); }}
 
-    st.markdown(f"""
-    <div style="text-align:center; padding: 2.5rem 0 0.75rem;">
-        <img src="data:image/png;base64,{_logo_b64}" alt="TCN"
-             style="height: 72px; width: auto; margin-bottom: 0.75rem;
-                    filter: drop-shadow(0 2px 12px rgba(0, 100, 200, 0.3));" />
-        <h1 style="color: #ffffff; font-weight: 700; margin: 0;
-                   font-size: 1.75rem; letter-spacing: -0.02em;
-                   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-                   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;">
-            TCN Outage Manager
-        </h1>
-        <p style="color: rgba(255, 255, 255, 0.55); font-size: 0.875rem; margin-top: 0.5rem;
-                  letter-spacing: 0.01em; font-weight: 400;">
-            Transmission Company of Nigeria
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.5, 1])
-    with col2:
-        st.markdown("""
-        <p style="text-align:center; color: rgba(255, 255, 255, 0.8); font-weight: 600; font-size: 1.1rem; margin-bottom: 0.5rem;">
-            Sign In
-        </p>
-        """, unsafe_allow_html=True)
-        with st.form("login_form"):
+    /* Sign-in button */
+    [data-testid="stForm"] [data-testid="stFormSubmitButton"] button {{
+        background: linear-gradient(135deg, {TCN_RED} 0%, #8f1620 100%) !important;
+        border: none !important; border-radius: 12px !important;
+        padding: 0.62rem 1rem !important; margin-top: 0.5rem;
+        box-shadow: 0 4px 18px rgba(200,30,40,0.45), inset 0 1px 0 rgba(255,255,255,0.22);
+        transition: transform 0.3s var(--ease-spring), box-shadow 0.3s ease, filter 0.25s ease;
+    }}
+    [data-testid="stForm"] [data-testid="stFormSubmitButton"] button p {{
+        color: white !important; font-weight: 700 !important;
+        letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.82rem !important;
+    }}
+    [data-testid="stForm"] [data-testid="stFormSubmitButton"] button:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 8px 26px rgba(200,30,40,0.6), inset 0 1px 0 rgba(255,255,255,0.25);
+        filter: brightness(1.06);
+    }}
+    [data-testid="stForm"] [data-testid="stFormSubmitButton"] button:active {{ transform: translateY(0); }}
+
+    .login-footer {{
+        text-align: center; margin-top: 1.1rem;
+        color: rgba(255,255,255,0.45); font-size: 0.7rem; letter-spacing: 0.08em;
+    }}
+    .login-footer b {{ color: rgba(255,255,255,0.65); }}
+    </style>""", unsafe_allow_html=True)
+
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        if logo64:
+            st.markdown(
+                f'<div class="login-logo"><img src="data:image/png;base64,{logo64}"></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<p class="login-title">TCN Grid Outage Manager</p>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="login-sub">330kV <span class="dot">·</span> 132kV Equipment Outages</p>',
+            unsafe_allow_html=True,
+        )
+        with st.form("login"):
             username = st.text_input("Username", placeholder="Enter your username")
             password = st.text_input("Password", type="password", placeholder="Enter your password")
-            st.markdown("<div style='height: 0.25rem;'></div>", unsafe_allow_html=True)
-            submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-            if submitted:
-                users = _load_users()
-                if username in users and users[username]["password"] == _hash_pw(password):
-                    st.session_state["authenticated"] = True
-                    st.session_state["username"] = username
-                    st.session_state["user_role"] = users[username]["role"]
-                    st.session_state["user_name"] = users[username]["name"]
+            if st.form_submit_button("Sign In", use_container_width=True):
+                users = load_users()
+                u = users.get(username.strip())
+                if u and u["password"] == _hash(password):
+                    st.session_state.user = {"username": username.strip(), **{k: v for k, v in u.items() if k != "password"}}
                     st.rerun()
                 else:
-                    st.error("Invalid username or password.")
+                    st.error("Invalid username or password")
+        st.markdown(
+            '<div class="login-footer"><b>TRANSMISSION COMPANY OF NIGERIA</b><br>'
+            'Grid Operations · Secure Access</div>',
+            unsafe_allow_html=True,
+        )
 
 
-def show_user_management():
-    st.header("User Management")
-    users = _load_users()
+# ──────────────────────────────────────────────────────────────
+# Canonical station-name normalization (station_region_map.csv)
+# ──────────────────────────────────────────────────────────────
+_ST_STOP = {"t/s", "s/s", "ts", "ss", "t", "s", "substation", "substaion", "station",
+            "switching", "gis", "mobile", "phase", "new"}
 
-    st.subheader("Existing Users")
-    for uname, info in users.items():
-        c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
-        c1.text(uname)
-        c2.text(info["name"])
-        c3.text(info["role"])
-        if uname != "admin" and c4.button("Remove", key=f"del_{uname}"):
-            del users[uname]
-            _save_users(users)
-            st.rerun()
-
-    st.divider()
-    st.subheader("Add New User")
-    with st.form("add_user", clear_on_submit=True):
-        ac1, ac2 = st.columns(2)
-        new_user = ac1.text_input("Username")
-        new_name = ac2.text_input("Full Name")
-        ac3, ac4 = st.columns(2)
-        new_pw = ac3.text_input("Password", type="password")
-        new_role = ac4.selectbox("Role", ["operator", "admin"])
-        if st.form_submit_button("Add User", type="primary"):
-            if not new_user or not new_pw:
-                st.error("Username and password are required.")
-            elif new_user in users:
-                st.error("Username already exists.")
-            else:
-                users[new_user] = {"password": _hash_pw(new_pw), "role": new_role, "name": new_name}
-                _save_users(users)
-                st.success(f"User '{new_user}' created.")
-                st.rerun()
-
-DATA_DIR = Path(__file__).parent
-UPLOADS_DIR = DATA_DIR / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
-SOURCE_COLUMNS = [
-    "Disco", "Region", "SubRegion_ACC", "Substation", "Feeder_33kV",
-    "Date_Off", "Hour_Off", "Minute_Off", "Date_On", "Hour_On", "Minute_On",
-    "Duration", "Class", "Last_Load_MW", "Event_Indication",
-    "Officer_Interruption", "Officer_Restoration",
-    "Party_Responsible", "Weather_Condition", "Remarks",
-]
-_no_party = [c for c in SOURCE_COLUMNS if c != "Party_Responsible"]
-COLUMNS = _no_party[:14] + ["Frequency_Hz"] + _no_party[14:]
-DISPLAY_COLUMNS = [
-    "Disco", "Region", "SubRegion/ACC", "Substation", "33kV Feeder",
-    "Date Off", "Hour Off", "Minute Off", "Date On", "Hour On", "Minute On",
-    "Duration (H:mm)", "Class", "Last Load (MW)", "Frequency (Hz)", "Event/Indication",
-    "Officer (Interruption)", "Officer (Restoration)",
-    "Weather", "Remarks",
-]
-
-DISCOS = [
-    "Abuja", "Benin", "Bilateral", "Eko", "Enugu",
-    "Ibadan", "Ikeja", "Jos", "Kaduna", "Kano", "Port-Harcourt", "Yola",
-]
-
-TCN_HIERARCHY = {
-    "Abuja": {
-        "Apo": [
-            "Apo 132kV", "Karu 132kV", "Keffi 132kV", "Akwanga 132kV",
-            "Lafia 132kV", "Nasarawa 132kV",
-        ],
-        "Katampe": [
-            "Central Area 132kV", "Katampe 132kV", "Gwagwalada 132kV",
-            "Kubwa 132kV", "Suleja 132kV",
-        ],
-        "Ajaokuta": [
-            "Ajaokuta 132kV", "Okpella 132kV", "Lokoja 132kV",
-            "Geregu 132kV", "Itobe 132kV",
-        ],
-    },
-    "Bauchi": {
-        "Jos": [
-            "Makeri 132kV", "Jos 132kV", "Bukuru 132kV",
-            "Pankshin 132kV",
-        ],
-        "Bauchi": [
-            "Bauchi 132kV", "Ningi 132kV", "Azare 132kV",
-        ],
-        "Gombe": [
-            "Gombe 132kV", "Dadinkowa 132kV",
-        ],
-        "Yola": [
-            "Yola 132kV", "Jimeta 132kV", "Numan 132kV",
-        ],
-    },
-    "Benin": {
-        "Benin": [
-            "Benin 132kV", "Irrua 132kV", "Etsako 132kV",
-            "Auchi 132kV", "Ugbowo 132kV",
-        ],
-        "Delta": [
-            "Delta 132kV", "Sapele 132kV", "Warri 132kV",
-            "Effurun 132kV", "Ughelli 132kV",
-        ],
-        "Ihovbor": [
-            "Ihovbor 132kV", "Ihovbor NIPP 132kV",
-        ],
-        "Omotosho": [
-            "Omotosho 132kV", "Erinje 132kV", "Ondo 132kV",
-            "Ore 132kV",
-        ],
-    },
-    "Enugu": {
-        "New Haven": [
-            "New-Haven 132kV", "New-Haven 330kV", "UNN Nsukka 132kV",
-            "Nsukka 132kV", "Nkalagu 132kV", "Abakaliki 132kV",
-        ],
-        "Onitsha": [
-            "Onitsha 132kV", "Onitsha 330kV", "Agbor 132kV",
-            "Awka 132kV", "Agu Awka 132kV", "GCM 132kV",
-        ],
-        "Ugwuaji": [
-            "Ugwuaji 330kV", "Ugwuaji 132kV", "Oji River 132kV",
-        ],
-        "Asaba": [
-            "Asaba 330kV", "Asaba 132kV",
-        ],
-        "Makurdi": [
-            "Apir 330kV", "Apir 132kV", "Otukpo 132kV",
-            "Yandev 132kV", "Wukari 132kV", "Takum 132kV",
-            "Kashimbilla 132kV",
-        ],
-    },
-    "Kaduna": {
-        "Kaduna Area": [
-            "Kaduna Town 132kV", "Mando 132kV", "Zaria 132kV",
-            "Funtua 132kV", "Kataeregi 132kV",
-        ],
-        "Kaduna Industrial": [
-            "Kaduna Industrial 132kV", "Rigasa 132kV",
-        ],
-    },
-    "Kano": {
-        "Kano Area": [
-            "Tamburawa 132kV", "Kwanar-Dangora 132kV", "Wudil 132kV",
-            "Katsina 132kV", "Azare 132kV", "Dutse 132kV",
-            "Damaturu 132kV", "Potiskum 132kV",
-        ],
-        "Kano Industrial": [
-            "Kano Industrial 132kV", "Dan Agundi 132kV",
-        ],
-    },
-    "Lagos": {
-        "Ajah": [
-            "Aja 132kV", "Lekki 132kV", "Alagbon 132kV",
-            "Akoka 132kV", "Oworonshoki 132kV", "Amuwo-Odofin 132kV",
-            "Apapa-Road 132kV",
-        ],
-        "Akangba": [
-            "Akangba 132kV", "Ilupeju 132kV", "Isolo 132kV",
-            "Itire 132kV", "Ijora 132kV", "Ojo 132kV",
-            "Ilashe 132kV",
-        ],
-        "Egbin": [
-            "Egbin 132kV", "Ikorodu 132kV", "Odogunyan 132kV",
-        ],
-        "Ikeja West": [
-            "Ikeja West 330kV", "Alausa 132kV", "Ogba 132kV",
-            "Alimosho 132kV", "Ejigbo 132kV", "Agbara 132kV",
-        ],
-        "Olorunsogo": [
-            "Olorunsogo 132kV", "Abeokuta 132kV", "New Abeokuta 132kV",
-            "Otta 132kV", "Papalanto 132kV",
-        ],
-    },
-    "Osogbo": {
-        "Osogbo": [
-            "Oshogbo 132kV", "Oshogbo 330kV", "Ile-Ife 132kV",
-            "Ilesha 132kV", "Offa 132kV",
-        ],
-        "Ayede": [
-            "Ayede 132kV", "Ayede 330kV", "Ibadan-North 132kV",
-            "Jericho 132kV", "Shagamu 132kV", "Ijebu-Ode 132kV",
-            "Iseyin 132kV", "Iwo 132kV", "Mcpherson 132kV",
-            "Oyo 132kV", "UI 132kV", "Saapade 132kV",
-        ],
-        "Ganmo": [
-            "Ganmo 330kV", "Ganmo 132kV", "Ilorin 132kV",
-            "Omu-Aran 132kV",
-        ],
-        "Akure": [
-            "Akure 132kV", "Ado Ekiti 132kV",
-        ],
-    },
-    "Port-Harcourt": {
-        "Portharcourt": [
-            "PH Main 132kV", "PH Town 132kV", "Rumuosi 132kV",
-            "Elelenwo 132kV", "Ahoada 132kV",
-        ],
-        "Alaoji": [
-            "Alaoji 132kV", "Alaoji NIPP 132kV", "Umuahia 132kV",
-            "Aba 132kV",
-        ],
-        "Calabar": [
-            "Calabar 132kV", "Adiabor 132kV", "Odukpani 132kV",
-            "Ikot-Ekpene 132kV", "Itu 132kV", "Uyo 132kV",
-            "Eket 132kV", "Ekim 132kV",
-        ],
-        "Owerri": [
-            "Owerri 132kV",
-        ],
-        "Afam": [
-            "Afam 132kV", "Gbarain 132kV", "Yenagoa 132kV",
-        ],
-    },
-    "Shiroro": {
-        "Shiroro": [
-            "Shiroro 330kV", "Shiroro II TS 132kV", "Minna 132kV",
-            "Tegina 132kV", "Mararaba TS 132kV", "Zungeru 132kV",
-        ],
-        "Kainji": [
-            "Kainji 132kV", "Kainji II TS 132kV", "Kontagora 132kV",
-            "Yauri 132kV", "Birnin Kebbi 132kV",
-        ],
-        "Jebba": [
-            "Jebba 330kV", "Jebba 132kV", "Bida 132kV",
-        ],
-        "Sokoto": [
-            "Sokoto 132kV",
-        ],
-    },
+_ST_ALIASES = {
+    "ajah": "aja", "amuwo": "amuwo odofin", "awka": "nibo awka",
+    "dangora": "kwana dangora", "danagundi": "dan agundi", "fakun": "fakum",
+    "gwarinpa": "gwarimpa", "ile ife": "ife", "ilesa": "ilesha", "offa": "ofa",
+    "old abeokuta": "abeokuta", "olorunshogo": "olorunsogo", "ota": "otta",
+    "oworo": "oworosoki", "oworonshoki": "oworosoki",
+    "ph main": "port harcourt main", "ph mains": "port harcourt main",
+    "ph town": "port harcourt town", "rumousi": "rumuosi",
+    "tamburawa": "tambarawa", "ugwuaiji": "ugwuaji",
+    "university of ibadan": "ui", "adiabo": "adiabor", "elelenwo": "elelenwon",
 }
 
-REGION_DISCO_MAP = {
-    "Abuja": ["Abuja", "Benin", "Jos"],
-    "Bauchi": ["Jos", "Yola"],
-    "Benin": ["Benin"],
-    "Enugu": ["Enugu"],
-    "Kaduna": ["Kaduna"],
-    "Kano": ["Kano"],
-    "Lagos": ["Eko", "Ikeja"],
-    "Osogbo": ["Ibadan"],
-    "Port-Harcourt": ["Port-Harcourt"],
-    "Shiroro": ["Abuja", "Kaduna", "Kano"],
+_ST_OVERRIDES = {
+    "Adiabo 330kV": "Adiabor 330KV T/S",
+    "Dadinkowa GS 132kV": "Dadinkowa GS",
 }
 
-EVENT_INDICATIONS = [
-    "Line Trip", "E/F", "O/C", "U/V", "O/V", "Buchholz",
-    "Diff. Protection", "Over Fluxing", "Restricted E/F",
-    "Surge Arrester", "Transformer Trip", "Bus Bar Protection",
-    "Distance Protection", "Power Swings", "Load Shedding",
-    "Planned Outage", "Emergency Outage", "System Collapse",
-    "Feeder Trip", "Equipment Failure", "Vandalism",
-    "Fire Outbreak", "Flooding", "Vegetation/Bush Burning",
-    "Jumper Cut", "Broken Conductor", "Tower Collapse",
-    "Insulator Failure", "Oil Leakage", "Expired CT/VT",
-    "Relay Maloperation", "Manual Trip", "Frequency Relay",
-    "Other",
-]
+# Cosmetic clean-ups applied AFTER canonical matching (typos in the map itself,
+# combined multi-station names collapsed to the primary station)
+_CANON_FIXUPS = {
+    "Agu Awka132/33kV S/S": "Agu Awka 132/33kV S/S",
+    "Nibo Awka` 132/33kV S/S": "Nibo Awka 132/33kV S/S",
+    "katampe-1 132/33kV S/S": "Katampe-1 132/33kV S/S",
+    "katampe-2 132/33kV S/S": "Katampe-2 132/33kV S/S",
+    "Delta 330/132KV T/S Aladja Steel 330/132KV T/S": "Delta 330/132KV T/S",
+    "Ihovbor 330/132kV TS Ihovbor NIPP 330/132kV TS Ihovbor Azura 330/132kV TS": "Ihovbor 330/132kV T/S",
+    "Omotosho phase 1 330/132/33KV T/S Omotosho phase 2 330/132/33KV T/S": "Omotosho 330/132/33KV T/S",
+    "New Abeokuta 132/3kV Substaion": "New Abeokuta 132/33kV Substation",
+    "Sapade 132kv S/S": "Sapade 132kV S/S",
+}
 
-OUTAGE_CLASSES = ["Forced", "Emergency", "Planned"]
-WEATHER_CONDITIONS = ["Clear", "Rain", "Cloudy", "Storm", "Harmattan", "Fine", "Hazy", "Foggy"]
-
-
-def parse_excel_file(fpath):
-    rows = []
-    try:
-        xls = pd.ExcelFile(fpath, engine="openpyxl")
-        for sheet in xls.sheet_names:
-            df = pd.read_excel(fpath, sheet_name=sheet, header=None, engine="openpyxl")
-            header_row = None
-            for idx, row in df.iterrows():
-                vals = [str(v).strip().lower() for v in row.values[:5]]
-                if "disco" in vals and "region" in vals:
-                    header_row = idx
-                    break
-            if header_row is None:
-                continue
-            data = df.iloc[header_row + 1:].copy()
-            ncols = data.shape[1]
-            if ncols > 20:
-                data = data.iloc[:, :20]
-            elif ncols < 20:
-                for i in range(20 - ncols):
-                    data[f"_pad_{i}"] = None
-            data.columns = SOURCE_COLUMNS
-            data = data.dropna(subset=["Disco", "Region"], how="all")
-            data = data[~data["Disco"].astype(str).str.contains("NO TCN ATTRIBUTION", case=False, na=False)]
-            data = data[data["Disco"].notna() & (data["Disco"].astype(str).str.strip() != "")]
-            data = data[data["Disco"].astype(str).str.strip().str.lower() != "nan"]
-            data["Source_File"] = fpath.name
-            data["Source_Sheet"] = sheet
-            rows.append(data)
-    except Exception:
-        pass
-    return rows
+_SR_STOP = {"sub", "region", "sub-region", "subregion", "works", "work", "centre",
+            "center", "w/c", "wc", "w", "c", "proposed", "axis"}
 
 
-def parse_csv_file(fpath):
-    rows = []
-    try:
-        df_header = pd.read_csv(fpath, nrows=0)
-        header_cols = [c.strip().lower() for c in df_header.columns]
-        if set(COLUMNS).issubset(set(header_cols)) or "Disco" in df_header.columns:
-            df = pd.read_csv(fpath)
-            col_map = {}
-            for c in COLUMNS:
-                for dc in df.columns:
-                    if dc.strip().lower() == c.lower() or dc.strip() == c:
-                        col_map[dc] = c
-                        break
-            df = df.rename(columns=col_map)
-            for c in COLUMNS:
-                if c not in df.columns:
-                    df[c] = None
-            data = df[COLUMNS].copy()
-        else:
-            df = pd.read_csv(fpath, header=None)
-            header_row = None
-            for idx, row in df.iterrows():
-                vals = [str(v).strip().lower() for v in row.values[:5]]
-                if "disco" in vals and "region" in vals:
-                    header_row = idx
-                    break
-            if header_row is not None:
-                data = df.iloc[header_row + 1:].copy()
-            else:
-                data = df.copy()
-            ncols = data.shape[1]
-            if ncols > 20:
-                data = data.iloc[:, :20]
-            elif ncols < 20:
-                for i in range(20 - ncols):
-                    data[f"_pad_{i}"] = None
-            data.columns = SOURCE_COLUMNS
-
-        data = data.dropna(subset=["Disco", "Region"], how="all")
-        data = data[~data["Disco"].astype(str).str.contains("NO TCN ATTRIBUTION", case=False, na=False)]
-        data = data[data["Disco"].notna() & (data["Disco"].astype(str).str.strip() != "")]
-        data = data[data["Disco"].astype(str).str.strip().str.lower() != "nan"]
-        data["Source_File"] = fpath.name
-        data["Source_Sheet"] = "CSV"
-        rows.append(data)
-    except Exception:
-        pass
-    return rows
+def _sr_key(name):
+    s = str(name).lower().strip()
+    s = re.sub(r"\(.*?\)", " ", s)
+    s = s.replace("-", " ").replace("/", " ")
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    return " ".join(t for t in s.split() if t not in _SR_STOP).strip()
 
 
-def parse_word_file(fpath):
-    from docx import Document
-    rows = []
-    try:
-        doc = Document(fpath)
-        for table in doc.tables:
-            header_cells = [c.text.strip().lower() for c in table.rows[0].cells]
-            if "disco" in header_cells and "region" in header_cells:
-                table_data = []
-                for row in table.rows[1:]:
-                    table_data.append([c.text.strip() for c in row.cells])
-                df = pd.DataFrame(table_data)
-                ncols = df.shape[1]
-                if ncols > 20:
-                    df = df.iloc[:, :20]
-                elif ncols < 20:
-                    for i in range(20 - ncols):
-                        df[f"_pad_{i}"] = None
-                df.columns = COLUMNS
-                df = df.dropna(subset=["Disco", "Region"], how="all")
-                df = df[df["Disco"].notna() & (df["Disco"].astype(str).str.strip() != "")]
-                df = df[df["Disco"].astype(str).str.strip().str.lower() != "nan"]
-                df["Source_File"] = fpath.name
-                df["Source_Sheet"] = "Word Table"
-                rows.append(df)
-    except Exception:
-        pass
-    return rows
-
-
-def clean_combined(combined):
-    if "Party_Responsible" in combined.columns:
-        combined = combined.drop(columns=["Party_Responsible"])
-    combined["Date_Off"] = pd.to_datetime(combined["Date_Off"], errors="coerce", dayfirst=True)
-    combined["Date_On"] = pd.to_datetime(combined["Date_On"], errors="coerce", dayfirst=True)
-    combined["Last_Load_MW"] = pd.to_numeric(combined["Last_Load_MW"], errors="coerce")
-    if "Frequency_Hz" not in combined.columns:
-        combined["Frequency_Hz"] = None
-    combined["Frequency_Hz"] = pd.to_numeric(combined["Frequency_Hz"], errors="coerce")
-
-    def parse_duration(val):
-        if pd.isna(val):
-            return 0.0
-        s = str(val).strip()
-        m = re.match(r"(\d+):(\d+):(\d+)", s)
-        if m:
-            return int(m.group(1)) + int(m.group(2)) / 60 + int(m.group(3)) / 3600
-        m = re.match(r"(\d+):(\d+)", s)
-        if m:
-            return int(m.group(1)) + int(m.group(2)) / 60
-        return 0.0
-
-    combined["Duration_Hours"] = combined["Duration"].apply(parse_duration)
-    combined["Region"] = combined["Region"].astype(str).str.strip().str.title()
-    combined["Disco"] = combined["Disco"].astype(str).str.strip().str.title()
-    combined["Class"] = combined["Class"].astype(str).str.strip().str.title()
-    combined["Weather_Condition"] = combined["Weather_Condition"].astype(str).str.strip().str.title()
-    return combined
+def _st_key(name):
+    s = str(name).lower().strip()
+    s = re.sub(r"\(.*?\)", " ", s)
+    s = s.replace("`", "").replace("'", "").replace("-", " ")
+    s = re.sub(r"\d{2,3}\s*/\s*\d{2,3}(\s*/\s*\d{2,3})?\s*kv", " ", s)
+    s = re.sub(r"\d{2,3}\s*kv", " ", s)
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
+    return " ".join(t for t in s.split() if t not in _ST_STOP).strip()
 
 
 @st.cache_data
-def load_all_data():
-    xlsx_files = sorted(
-        list(DATA_DIR.glob("TCN*attributes*.xlsx"))
-        + list(DATA_DIR.glob("TCN*attributes*.xlsm"))
-        + list(UPLOADS_DIR.glob("*.xlsx"))
-        + list(UPLOADS_DIR.glob("*.xlsm")),
-        key=lambda f: f.name,
+def _station_lookup():
+    if not STATION_MAP_FILE.exists():
+        return None
+    m = pd.read_csv(STATION_MAP_FILE).dropna(how="all")
+    m = m[m["Region"].notna()]
+    ts_map, ss_map, ts_first, ss_first = {}, {}, {}, {}
+    station_subregion, sr_canon = {}, {}
+    for _, r in m.iterrows():
+        subregion = re.sub(r"\s+", " ", str(r["Sub-Region"]).strip())
+        if subregion and subregion.lower() != "nan":
+            srk = _sr_key(subregion)
+            if srk and srk not in sr_canon:
+                sr_canon[srk] = subregion
+        ts = re.sub(r"\s+", " ", str(r["Transmission Station"]).strip())
+        ss = re.sub(r"\s+", " ", str(r["Sub-Station"]).strip().replace("\n", " "))
+        if ts and ts.lower() != "nan":
+            k = _st_key(ts)
+            if k and k not in ts_map:
+                ts_map[k] = ts
+            f = k.split()[0] if k else ""
+            if f and f not in ts_first:
+                ts_first[f] = ts
+            final = _CANON_FIXUPS.get(ts, ts)
+            if subregion and subregion.lower() != "nan":
+                station_subregion.setdefault(final, subregion)
+        if ss and ss.lower() != "nan":
+            k = _st_key(ss)
+            ss_clean = re.sub(
+                r"\s*\((Under [Cc]onstruction|only fence|Only fence|Only plot of land|"
+                r"Awaiting Mobitra|completed without lines|No transmission line)\)\s*$", "", ss)
+            if k and k not in ss_map:
+                ss_map[k] = ss_clean
+            f = k.split()[0] if k else ""
+            if f and f not in ss_first:
+                ss_first[f] = ss_clean
+            final = _CANON_FIXUPS.get(ss_clean, ss_clean)
+            if subregion and subregion.lower() != "nan":
+                station_subregion.setdefault(final, subregion)
+    # stations absent from the map but with known sub-regions
+    station_subregion.setdefault("Billiri 132kV", "Gombe Sub-Region")
+    station_subregion.setdefault("Dadinkowa GS", "Gombe Sub-Region")
+    station_subregion.setdefault("132KV DAWAKI T/S", "Abuja Sub-region")
+    return ts_map, ss_map, ts_first, ss_first, station_subregion, sr_canon
+
+
+def _st_lookup_level(k, m, mf):
+    alias = _ST_ALIASES.get(k)
+    if alias is None:
+        toks = k.split()
+        for n in range(len(toks), 0, -1):
+            kk = " ".join(toks[:n])
+            if kk in _ST_ALIASES:
+                alias = _ST_ALIASES[kk]
+                break
+    for key in (k, alias):
+        if not key:
+            continue
+        if key in m:
+            return m[key]
+        toks = key.split()
+        for n in range(len(toks) - 1, 0, -1):
+            kk = " ".join(toks[:n])
+            if kk in m:
+                return m[kk]
+        f = key.split()[0] if key else ""
+        if f in mf:
+            return mf[f]
+    return None
+
+
+def normalize_station(raw):
+    """Map a free-form substation name to its canonical name; return input if unmatched."""
+    lookup = _station_lookup()
+    raw = str(raw).strip()
+    if lookup is None or not raw or raw.lower() == "nan":
+        return raw
+    if raw in _ST_OVERRIDES:
+        return _ST_OVERRIDES[raw]
+    if raw in _CANON_FIXUPS:
+        return _CANON_FIXUPS[raw]
+    ts_map, ss_map, ts_first, ss_first, _, _ = lookup
+    k = _st_key(raw)
+    if not k:
+        return raw
+    levels = [(ts_map, ts_first), (ss_map, ss_first)]
+    if "330" not in raw:
+        levels.reverse()
+    for m, mf in levels:
+        res = _st_lookup_level(k, m, mf)
+        if res:
+            return _CANON_FIXUPS.get(res, res)
+    return raw
+
+
+def normalize_subregion(station, raw_sr):
+    """Canonical sub-region: prefer map lookup by station, else normalize the text."""
+    lookup = _station_lookup()
+    raw_sr = str(raw_sr).strip()
+    if lookup is None or raw_sr.lower() == "nan":
+        return raw_sr
+    _, _, _, _, station_subregion, sr_canon = lookup
+    target = station_subregion.get(str(station).strip())
+    if target:
+        return target
+    return sr_canon.get(_sr_key(raw_sr), raw_sr)
+
+
+# ──────────────────────────────────────────────────────────────
+# Data loading & derivation
+# ──────────────────────────────────────────────────────────────
+def _parse_duration(v):
+    if pd.isna(v):
+        return np.nan
+    s = str(v).strip()
+    m = re.match(r"^(\d+):(\d{1,2})(?::(\d{1,2}))?$", s)
+    if m:
+        return int(m.group(1)) + int(m.group(2)) / 60 + (int(m.group(3) or 0)) / 3600
+    try:
+        return float(s)
+    except ValueError:
+        return np.nan
+
+
+def _voltage(row):
+    for field in (row["Equipment"], row["Substation"]):
+        s = str(field)
+        if "330" in s:
+            return "330kV"
+        if "132" in s:
+            return "132kV"
+    return "Other"
+
+
+def _equip_type(e):
+    s = str(e).lower()
+    if "transformer" in s or re.search(r"\btr\d", s) or "mva" in s:
+        return "Transformer"
+    if "reactor" in s:
+        return "Reactor"
+    if "bus" in s:
+        return "Bus"
+    if "feeder" in s or "fdr" in s:
+        return "Feeder"
+    if "line" in s:
+        return "Line"
+    return "Grid Event"
+
+
+@st.cache_data(show_spinner="Loading outage data…")
+def load_data():
+    df = pd.read_excel(DATA_FILE, sheet_name=0)
+    df.columns = [c.strip() for c in df.columns]
+
+    df["Duration_Hours"] = df["Duration"].map(_parse_duration)
+    df["Datetime_Off"] = (
+        pd.to_datetime(df["Date_Off"], dayfirst=True, errors="coerce")
+        + pd.to_timedelta(pd.to_numeric(df["Hour_Off"], errors="coerce").fillna(0), unit="h")
+        + pd.to_timedelta(pd.to_numeric(df["Minute_Off"], errors="coerce").fillna(0), unit="m")
     )
-    csv_files = sorted(UPLOADS_DIR.glob("*.csv"), key=lambda f: f.name)
-    word_files = sorted(UPLOADS_DIR.glob("*.docx"), key=lambda f: f.name)
+    df["Datetime_On"] = (
+        pd.to_datetime(df["Date_On"], dayfirst=True, errors="coerce")
+        + pd.to_timedelta(pd.to_numeric(df["Hour_On"], errors="coerce").fillna(0), unit="h")
+        + pd.to_timedelta(pd.to_numeric(df["Minute_On"], errors="coerce").fillna(0), unit="m")
+    )
+    df["Status"] = np.where(df["Datetime_On"].isna(), "Ongoing", "Restored")
+    df["Voltage_Level"] = df.apply(_voltage, axis=1)  # uses raw names before normalization
+    df["Equipment_Type"] = df["Equipment"].map(_equip_type)
+    # Canonical station & sub-region names from station_region_map.csv (fixes typos &
+    # duplicates, including rows arriving via Upload Data and Report Outage)
+    _canon_cache = {s: normalize_station(s) for s in df["Substation"].dropna().astype(str).str.strip().unique()}
+    df["Substation"] = df["Substation"].astype(str).str.strip().map(lambda s: _canon_cache.get(s, s))
+    _sr_cache = {}
+    for st, sr in df[["Substation", "SubRegion_ACC"]].drop_duplicates().itertuples(index=False):
+        _sr_cache[(st, str(sr).strip())] = normalize_subregion(st, sr)
+    df["SubRegion_ACC"] = [
+        _sr_cache.get((st, str(sr).strip()), sr)
+        for st, sr in zip(df["Substation"], df["SubRegion_ACC"])
+    ]
+    df["Last_Load_MW"] = pd.to_numeric(df["Last_Load_MW"], errors="coerce")
 
-    all_rows = []
-    for fpath in xlsx_files:
-        all_rows.extend(parse_excel_file(fpath))
-    for fpath in csv_files:
-        all_rows.extend(parse_csv_file(fpath))
-    for fpath in word_files:
-        all_rows.extend(parse_word_file(fpath))
+    # Officer fields (added later — backfill for older workbooks that lack them)
+    for col in ("Officer_Interruption", "Officer_Restoration"):
+        if col not in df.columns:
+            df[col] = None
+        df[col] = df[col].astype(str).str.strip().replace(
+            {"nan": None, "None": None, "": None, "NaT": None})
 
-    if not all_rows:
-        return pd.DataFrame(columns=COLUMNS + ["Source_File", "Source_Sheet"])
-
-    combined = pd.concat(all_rows, ignore_index=True)
-    return clean_combined(combined)
-
-
-def apply_filters(df):
-    st.sidebar.header("Filters")
-
-    date_min = df["Date_Off"].min()
-    date_max = df["Date_Off"].max()
-    if pd.notna(date_min) and pd.notna(date_max):
-        date_range = st.sidebar.date_input(
-            "Date Range",
-            value=(date_min.date(), date_max.date()),
-            min_value=date_min.date(),
-            max_value=date_max.date(),
-        )
-        if len(date_range) == 2:
-            df = df[
-                (df["Date_Off"].dt.date >= date_range[0])
-                & (df["Date_Off"].dt.date <= date_range[1])
-            ]
-
-    regions = sorted(df["Region"].dropna().unique())
-    sel_regions = st.sidebar.multiselect("Region", regions, default=regions)
-    if sel_regions:
-        df = df[df["Region"].isin(sel_regions)]
-
-    discos = sorted(df["Disco"].dropna().unique())
-    sel_discos = st.sidebar.multiselect("Disco", discos, default=discos)
-    if sel_discos:
-        df = df[df["Disco"].isin(sel_discos)]
-
-    classes = sorted(df["Class"].dropna().unique())
-    sel_classes = st.sidebar.multiselect("Outage Class", classes, default=classes)
-    if sel_classes:
-        df = df[df["Class"].isin(sel_classes)]
-
-    search = st.sidebar.text_input("Search (Substation, Feeder, Remarks)")
-    if search:
-        mask = (
-            df["Substation"].astype(str).str.contains(search, case=False, na=False)
-            | df["Feeder_33kV"].astype(str).str.contains(search, case=False, na=False)
-            | df["Remarks"].astype(str).str.contains(search, case=False, na=False)
-        )
-        df = df[mask]
-
+    for col in ("Class", "Weather_Condition", "Party_Responsible", "Region"):
+        df[col] = df[col].astype(str).str.strip().replace({"nan": "Unspecified", "None": "Unspecified", "": "Unspecified"})
     return df
 
 
-TCN_CHART_LAYOUT = dict(
-    font=dict(family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif", color="#1e2536"),
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    title_font=dict(size=14, color="#1e2536", family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif", weight=600),
-    margin=dict(l=40, r=20, t=44, b=40),
-    hoverlabel=dict(
-        bgcolor="#1e2f5c",
-        font_size=12,
-        font_family="-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif",
-        font_color="#eaecf2",
-        bordercolor="#1e2f5c",
-    ),
-)
-TCN_COLORS = ["#1e3a7a", "#b8232e", "#3460a8", "#d44450", "#5080c0", "#e87080", "#142a5c", "#901828"]
-TCN_RED = "#c81e28"
-TCN_RED_SCALE = [[0, "#e8edf5"], [0.5, TCN_RED], [1, "#8b0000"]]
+def _norm_region_name(r):
+    r = str(r).strip().title()
+    if "Harcourt" in r or "Harcout" in r:
+        return "Port-Harcourt"
+    return r
 
 
-def show_dashboard(df):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Outages", f"{len(df):,}")
-    c2.metric("Total Duration (hrs)", f"{df['Duration_Hours'].sum():,.1f}")
-    c3.metric("Avg Duration (hrs)", f"{df['Duration_Hours'].mean():,.2f}" if len(df) else "0")
-    c4.metric("Total Load Lost (MW)", f"{df['Last_Load_MW'].sum():,.1f}")
-    c5.metric("Unique Substations", f"{df['Substation'].nunique():,}")
+def _clean_cell(s):
+    if pd.isna(s):
+        return None
+    s = " ".join(str(s).split())
+    return s or None
 
-    col1, col2 = st.columns(2)
 
-    with col1:
-        by_region = df.groupby("Region").agg(
-            Outages=("Region", "size"),
-            Total_Duration=("Duration_Hours", "sum"),
-            Total_Load_MW=("Last_Load_MW", "sum"),
-        ).reset_index().sort_values("Outages", ascending=False)
-        fig = px.bar(
-            by_region, x="Region", y="Outages", color="Total_Load_MW",
-            title="Outages by Region",
-            color_continuous_scale=TCN_RED_SCALE,
-            labels={"Total_Load_MW": "Load Lost (MW)"},
+@st.cache_data(show_spinner="Loading equipment catalog…")
+def load_catalog():
+    """Canonical equipment register from the 330kV and 132kV reference workbooks.
+
+    Includes region, sub-region, station, line names/nomenclature and
+    transformer names/nomenclature. 33kV feeder names and peak load are
+    intentionally excluded.
+    """
+    rows = []
+
+    # ── 330kV Transformers and Lines ──
+    if CATALOG_330_FILE.exists():
+        xl = pd.ExcelFile(CATALOG_330_FILE)
+        skip = {"dashboard", "station summary"}
+        for sheet in [s for s in xl.sheet_names if s.strip().lower() not in skip]:
+            raw = pd.read_excel(xl, sheet_name=sheet, header=None)
+            hdr = None
+            for i in range(min(15, len(raw))):
+                if str(raw.iat[i, 0]).strip() == "Region":
+                    hdr = i
+                    break
+            if hdr is None:
+                continue
+            df = raw.iloc[hdr + 1:].copy()
+            df.columns = [str(c).replace("\n", " ").strip() for c in raw.iloc[hdr]]
+            for col in ("Region", "Subregion", "Substation"):
+                if col in df.columns:
+                    df[col] = df[col].ffill()
+            for _, r in df.iterrows():
+                station = _clean_cell(r.get("Substation"))
+                if not station:
+                    continue
+                region = _norm_region_name(r.get("Region"))
+                sub = _clean_cell(r.get("Subregion"))
+                tn = _clean_cell(r.get("Transformer Naming"))
+                tnom = _clean_cell(r.get("Transformer Nomenclature"))
+                if tn or tnom:
+                    name = tn or "330/132kV Transformer"
+                    if tnom and tnom not in name:
+                        name = f"{name} ({tnom})"
+                    rows.append((region, sub, station, "Transformer", "330kV", name))
+                ln = _clean_cell(r.get("330/132kV Line Naming"))
+                lnom = _clean_cell(r.get("330kV Line Nomenclature"))
+                if ln or lnom:
+                    name = ln or "330kV Line"
+                    if lnom and lnom not in name:
+                        name = f"{name} ({lnom})"
+                    rows.append((region, sub, station, "Line", "330kV", name))
+
+    # ── 132kV Transformers (feeders & peak load excluded) ──
+    if CATALOG_132_FILE.exists():
+        raw = pd.read_excel(CATALOG_132_FILE, sheet_name="ALL REGIONS", header=None)
+        hdr = None
+        for i in range(min(15, len(raw))):
+            if str(raw.iat[i, 0]).strip() == "S/N":
+                hdr = i
+                break
+        if hdr is not None:
+            df = raw.iloc[hdr + 1:].copy()
+            cols = [str(c).replace("\n", " ").strip() for c in raw.iloc[hdr]]
+            df.columns = cols
+            desig_c = next((c for c in cols if c.startswith("Transformer Designation")), None)
+            nom_c = next((c for c in cols if c.startswith("Transformer Nomenclature")), None)
+            rat_c = next((c for c in cols if c.startswith("Transformer Rating")), None)
+            for col in ("Region", "Sub-Region", "Substation"):
+                df[col] = df[col].ffill()
+            for _, r in df.iterrows():
+                desig = _clean_cell(r.get(desig_c)) if desig_c else None
+                nom = _clean_cell(r.get(nom_c)) if nom_c else None
+                if not (desig or nom):
+                    continue
+                station = _clean_cell(r.get("Substation"))
+                region = _norm_region_name(r.get("Region"))
+                if not station or region in ("Nan", "None"):
+                    continue
+                try:
+                    rating = float(r.get(rat_c))
+                except (TypeError, ValueError):
+                    rating = None
+                base = f"{rating:g}MVA 132/33kV Transformer" if rating else "132/33kV Transformer"
+                name = f"{base} {desig}" if desig else base
+                if nom and nom not in name:
+                    name = f"{name} ({nom})"
+                rows.append((region, _clean_cell(r.get("Sub-Region")), station, "Transformer", "132kV", name))
+
+    cat = pd.DataFrame(rows, columns=["Region", "SubRegion", "Substation",
+                                      "Equipment_Type", "Voltage_Level", "Equipment"])
+
+    # Canonical station & sub-region names (station_region_map.csv) so the two
+    # reference workbooks resolve to the SAME station entry — e.g. "AJAOKUTA TS
+    # (2AJA)" and "132KV AJAOKUTA TS" no longer appear as separate stations.
+    def _canon_cat_station(name, vl):
+        n = str(name).strip()
+        hint = n if ("330" in n or "132" in n) else f"{n} {vl}"
+        res = normalize_station(hint)
+        return n if res == hint else res
+
+    _st_cache = {
+        (n, v): _canon_cat_station(n, v)
+        for n, v in cat[["Substation", "Voltage_Level"]].drop_duplicates().itertuples(index=False)
+    }
+    cat["Substation"] = [_st_cache[(n, v)] for n, v in zip(cat["Substation"], cat["Voltage_Level"])]
+    _sr_cat_cache = {
+        (st, str(sr)): normalize_subregion(st, sr)
+        for st, sr in cat[["Substation", "SubRegion"]].drop_duplicates().itertuples(index=False)
+    }
+    cat["SubRegion"] = [_sr_cat_cache[(st, str(sr))] for st, sr in zip(cat["Substation"], cat["SubRegion"])]
+    return cat.drop_duplicates(subset=["Substation", "Equipment"]).reset_index(drop=True)
+
+
+@st.cache_data
+def load_hierarchy():
+    try:
+        h = pd.read_excel(HIERARCHY_FILE, sheet_name="Sheet1")
+        h.columns = [c.strip() for c in h.columns]
+        for c in h.columns:
+            if h[c].dtype == object:
+                h[c] = h[c].astype(str).str.strip()
+        h["Region"] = h["Region"].str.title().replace({"Port Harcourt": "Port-Harcourt", "Port-Harcourt ": "Port-Harcourt"})
+        return h.dropna(subset=["Region"])
+    except Exception:
+        return pd.DataFrame()
+
+
+# ──────────────────────────────────────────────────────────────
+# Sidebar filters
+# ──────────────────────────────────────────────────────────────
+def sidebar_filters(df, user):
+    with st.sidebar:
+        role_badge = "Admin" if user["role"] == "admin" else "Operator"
+        scope = user["region"] or "All Regions"
+        st.markdown(
+            f"**{user['name']}** ({user['username']})<br>"
+            f'<span style="font-size:0.72rem;background:rgba(255,255,255,0.14);padding:2px 8px;'
+            f'border-radius:5px;font-family:monospace;">{role_badge}</span> · {scope}',
+            unsafe_allow_html=True,
         )
-        fig.update_layout(height=400, **TCN_CHART_LAYOUT)
-        fig.update_traces(marker_line_width=0)
+        if st.button("Logout", type="primary"):
+            st.session_state.pop("user", None)
+            st.rerun()
+
+        st.markdown("""
+        <div class="flt-header">
+            <div class="flt-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#EDF1FA" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                </svg>
+            </div>
+            <div>
+                <div class="flt-title">Filters</div>
+                <div class="flt-sub">Refine the grid view</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        dmin = df["Datetime_Off"].min()
+        dmax = df["Datetime_Off"].max()
+        date_range = st.date_input(
+            "📅 Date Range",
+            value=(dmin.date(), dmax.date()) if pd.notna(dmin) else (),
+            key="flt_date",
+        )
+
+        regions_all = sorted(df["Region"].dropna().unique())
+        if user["region"]:
+            regions = [user["region"]]
+            st.multiselect("🌍 Region", regions_all, default=regions, disabled=True, key="flt_region")
+        else:
+            regions = st.multiselect("🌍 Region", regions_all, default=regions_all, key="flt_region")
+
+        voltages = st.multiselect("⚡ Voltage Level", ["330kV", "132kV", "Other"],
+                                  default=["330kV", "132kV", "Other"], key="flt_voltage")
+        classes = st.multiselect("🚨 Outage Class", sorted(df["Class"].unique()),
+                                 default=sorted(df["Class"].unique()), key="flt_class")
+        etypes = st.multiselect("🔧 Equipment Type", sorted(df["Equipment_Type"].unique()),
+                                default=sorted(df["Equipment_Type"].unique()), key="flt_etype")
+
+    filtered = df[
+        df["Region"].isin(regions)
+        & df["Voltage_Level"].isin(voltages)
+        & df["Class"].isin(classes)
+        & df["Equipment_Type"].isin(etypes)
+    ]
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start, end = date_range
+        filtered = filtered[
+            (filtered["Datetime_Off"] >= pd.Timestamp(start))
+            & (filtered["Datetime_Off"] < pd.Timestamp(end) + timedelta(days=1))
+        ]
+
+    with st.sidebar:
+        pct = (len(filtered) / len(df) * 100) if len(df) else 0
+        st.markdown(f"""
+        <div class="flt-count">
+            <div class="flt-count-num">{len(filtered):,}</div>
+            <div class="flt-count-label">records in view · {pct:.0f}% of data</div>
+            <div class="flt-count-bar"><div class="flt-count-fill" style="width:{pct:.0f}%;"></div></div>
+        </div>
+        """, unsafe_allow_html=True)
+    return filtered
+
+
+# ──────────────────────────────────────────────────────────────
+# Pages
+# ──────────────────────────────────────────────────────────────
+def show_dashboard(df, user):
+    st.markdown(f"""
+    <div class="dash-header">
+        <div>
+            <p class="dash-sub" style="margin-bottom:0;">Welcome back, <b>{user['name']}</b></p>
+            <h1 class="dash-title">Grid Operations Dashboard</h1>
+            <p class="dash-sub">{df['Region'].nunique()} regions · {len(df):,} outage records · 330kV / 132kV network</p>
+        </div>
+        <span class="live-badge"><span class="live-dot"></span>Live</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if df.empty:
+        st.info("No records match the current filters.")
+        return
+
+    ongoing = int((df["Status"] == "Ongoing").sum())
+    kpi_grid([
+        kpi_card("Total Outages", f"{len(df):,}", icon="bolt", color=TCN_BLUE),
+        kpi_card("Total Duration", f"{df['Duration_Hours'].sum():,.1f}", "hrs", icon="clock", color=TCN_RED),
+        kpi_card("Load Lost", f"{df['Last_Load_MW'].sum():,.1f}", "MW", icon="power", color="#956400"),
+        kpi_card("Ongoing", f"{ongoing:,}", icon="alert", color="#E06E6A" if ongoing else "#346538"),
+        kpi_card("Substations", f"{df['Substation'].nunique()}", icon="building", color="#1F6C9F"),
+    ])
+
+    # Voltage split mini row
+    v330 = df[df["Voltage_Level"] == "330kV"]
+    v132 = df[df["Voltage_Level"] == "132kV"]
+    kpi_grid([
+        kpi_card("330kV Outages", f"{len(v330):,}", f"· {v330['Duration_Hours'].sum():,.0f} hrs", icon="tower", color=TCN_RED),
+        kpi_card("132kV Outages", f"{len(v132):,}", f"· {v132['Duration_Hours'].sum():,.0f} hrs", icon="tower", color=TCN_BLUE),
+        kpi_card("Equipment Affected", f"{df['Equipment'].nunique():,}", icon="pulse", color="#346538"),
+        kpi_card("Avg Duration", f"{df['Duration_Hours'].mean():.2f}" if df['Duration_Hours'].notna().any() else "—", "hrs", icon="chart", color="#1F6C9F"),
+    ])
+
+    # Row 1: region bar + daily trend
+    c1, c2 = st.columns(2)
+    with c1:
+        by_region = df.groupby(["Region", "Voltage_Level"]).size().reset_index(name="Outages")
+        fig = px.bar(by_region, x="Region", y="Outages", color="Voltage_Level",
+                     title="Outages by Region & Voltage Level",
+                     color_discrete_map=VOLTAGE_COLORS, barmode="stack")
+        fig.update_layout(height=380, **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        daily = df.dropna(subset=["Datetime_Off"]).copy()
+        daily["Day"] = daily["Datetime_Off"].dt.floor("D")
+        trend = daily.groupby("Day").agg(Outages=("Day", "size"), Load=("Last_Load_MW", "sum")).reset_index()
+        trend["Day"] = pd.to_datetime(trend["Day"])
+        monthly = trend.set_index("Day").resample("MS").agg(
+            Outages=("Outages", "sum"), Load=("Load", "sum"),
+        ).reset_index()
+        monthly["Label"] = monthly["Day"].dt.strftime("%b '%y")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=monthly["Label"], y=monthly["Outages"], name="Outages",
+            marker_color=TCN_BLUE, marker_line_width=0, marker_cornerradius=4, opacity=0.85,
+        ))
+        fig.add_trace(go.Scatter(
+            x=monthly["Label"], y=monthly["Load"], name="Load Lost (MW)", yaxis="y2",
+            mode="lines+markers",
+            line=dict(color=TCN_RED, width=2.5, shape="spline"),
+            marker=dict(size=6, color=TCN_RED, line=dict(width=1.5, color="white")),
+        ))
+        fig.update_layout(
+            title="Monthly Outages & Load Lost",
+            yaxis=dict(title="Outages"),
+            yaxis2=dict(title="MW", overlaying="y", side="right", showgrid=False),
+            xaxis=dict(tickangle=-45),
+            legend=dict(x=0, y=1.14, orientation="h", font=dict(size=11), bgcolor="rgba(0,0,0,0)"),
+            height=380, **{**TCN_CHART_LAYOUT, "bargap": 0.35},
+        )
+        _style_chart(fig)
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
+    # Row 2: class pie + equipment type + party responsible
+    c3, c4, c5 = st.columns(3)
+    with c3:
         by_class = df["Class"].value_counts().reset_index()
         by_class.columns = ["Class", "Count"]
-        fig = px.pie(by_class, names="Class", values="Count", title="Outage Classification",
-                     hole=0.4, color_discrete_sequence=TCN_COLORS)
-        fig.update_layout(height=400, **TCN_CHART_LAYOUT)
+        fig = px.pie(by_class, names="Class", values="Count", hole=0.45,
+                     title="Outage Classification", color="Class", color_discrete_map=CLASS_COLORS)
+        fig.update_layout(height=360, **TCN_CHART_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
+    with c4:
+        by_et = df["Equipment_Type"].value_counts().reset_index()
+        by_et.columns = ["Type", "Count"]
+        fig = px.pie(by_et, names="Type", values="Count", hole=0.45,
+                     title="Equipment Type", color="Type", color_discrete_map=ETYPE_COLORS)
+        fig.update_layout(height=360, **TCN_CHART_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
+    with c5:
+        by_party = df["Party_Responsible"].value_counts().reset_index()
+        by_party.columns = ["Party", "Count"]
+        fig = px.pie(by_party, names="Party", values="Count", hole=0.45,
+                     title="Party Responsible", color="Party", color_discrete_map=PARTY_COLORS)
+        fig.update_layout(height=360, **TCN_CHART_LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
 
-    col3, col4 = st.columns(2)
-
-    with col3:
-        if df["Date_Off"].notna().any():
-            daily = df.groupby(df["Date_Off"].dt.date).agg(
-                Outages=("Date_Off", "size"),
-                Total_Load_MW=("Last_Load_MW", "sum"),
-            ).reset_index()
-            daily.columns = ["Date", "Outages", "Total_Load_MW"]
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=daily["Date"], y=daily["Outages"], name="Outages",
-                                  yaxis="y", marker_color=TCN_COLORS[0], marker_line_width=0))
-            fig.add_trace(go.Scatter(x=daily["Date"], y=daily["Total_Load_MW"], name="Load Lost (MW)",
-                                     yaxis="y2", mode="lines+markers",
-                                     line=dict(color=TCN_RED, width=2),
-                                     marker=dict(size=5, color=TCN_RED)))
-            fig.update_layout(
-                title="Daily Outages & Load Lost",
-                yaxis=dict(title="Outages"),
-                yaxis2=dict(title="Load Lost (MW)", overlaying="y", side="right"),
-                height=400,
-                legend=dict(x=0, y=1.1, orientation="h"),
-                **TCN_CHART_LAYOUT,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    with col4:
-        by_event = df["Event_Indication"].astype(str).value_counts().head(10).reset_index()
-        by_event.columns = ["Event", "Count"]
-        fig = px.bar(by_event, x="Count", y="Event", orientation="h", title="Top 10 Event Indications",
-                     color_discrete_sequence=[TCN_COLORS[0]])
-        fig.update_layout(height=400, yaxis=dict(autorange="reversed"), **TCN_CHART_LAYOUT)
-        fig.update_traces(marker_line_width=0)
-        st.plotly_chart(fig, use_container_width=True)
-
-    col5, col6 = st.columns(2)
-
-    with col5:
-        by_weather = df["Weather_Condition"].value_counts().reset_index()
-        by_weather.columns = ["Weather", "Count"]
-        fig = px.pie(by_weather, names="Weather", values="Count", title="Weather During Outages",
-                     hole=0.4, color_discrete_sequence=TCN_COLORS)
-        fig.update_layout(height=400, **TCN_CHART_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col6:
-        region_duration = df.groupby("Region")["Duration_Hours"].sum().reset_index().sort_values("Duration_Hours", ascending=True)
-        fig = px.bar(region_duration, x="Duration_Hours", y="Region", orientation="h",
+    # Row 3: duration by region + weather + top events
+    c6, c7 = st.columns(2)
+    with c6:
+        dur = df.groupby("Region")["Duration_Hours"].sum().sort_values().reset_index()
+        fig = px.bar(dur, x="Duration_Hours", y="Region", orientation="h",
                      title="Total Outage Duration by Region (hrs)",
-                     color_discrete_sequence=[TCN_RED])
-        fig.update_layout(height=400, **TCN_CHART_LAYOUT)
-        fig.update_traces(marker_line_width=0)
+                     color="Duration_Hours", color_continuous_scale=TCN_RED_SCALE)
+        fig.update_layout(height=380, coloraxis_showscale=False, **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+    with c7:
+        events = df["Event_Indication"].astype(str).str.strip().value_counts().head(10).reset_index()
+        events.columns = ["Event", "Count"]
+        fig = px.bar(events, x="Count", y="Event", orientation="h", title="Top 10 Event Indications",
+                     color_discrete_sequence=[TCN_BLUE])
+        fig.update_layout(height=380, yaxis=dict(autorange="reversed"), **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
         st.plotly_chart(fig, use_container_width=True)
 
 
-def show_data_table(df):
+def show_records(df):
+    _eyebrow("Data", "#E8EEF7", TCN_BLUE)
     st.header("Outage Records")
-    display = df.copy()
-    display_cols = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display.columns}
-    display = display.rename(columns=display_cols)
-    show_cols = DISPLAY_COLUMNS + ["Source_File", "Source_Sheet"]
-    show_cols = [c for c in show_cols if c in display.columns]
-    st.dataframe(display[show_cols], use_container_width=True, height=500)
-    st.caption(f"Showing {len(display):,} records")
+    search = st.text_input("Search records", placeholder="Search equipment, substation, remarks…")
+    view = df
+    if search:
+        mask = pd.Series(False, index=df.index)
+        for col in ("Equipment", "Substation", "Remarks", "Event_Indication", "Region"):
+            mask |= df[col].astype(str).str.contains(search, case=False, na=False)
+        view = df[mask]
+    st.caption(f"{len(view):,} records")
+    cols = ["Region", "SubRegion_ACC", "Substation", "Equipment", "Voltage_Level",
+            "Equipment_Type", "Datetime_Off", "Datetime_On", "Duration_Hours", "Status",
+            "Class", "Last_Load_MW", "Event_Indication", "Officer_Interruption", "Officer_Restoration", "Party_Responsible",
+            "Weather_Condition", "Remarks"]
+    st.dataframe(view[cols], use_container_width=True, height=520)
 
 
 def show_region_analysis(df):
+    _eyebrow("Analysis", "#EDF3EC", "#346538")
     st.header("Region Analysis")
-    region = st.selectbox("Select Region", sorted(df["Region"].dropna().unique()))
+
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        region = st.selectbox("Region", sorted(df["Region"].dropna().unique()), key="ra_region")
     rdf = df[df["Region"] == region]
+    with r2:
+        subregion = st.selectbox(
+            "Sub-Region / ACC", ["All Sub-Regions"] + sorted(rdf["SubRegion_ACC"].dropna().unique().tolist()),
+            key="ra_subregion")
+    if subregion != "All Sub-Regions":
+        rdf = rdf[rdf["SubRegion_ACC"] == subregion]
+    with r3:
+        station = st.selectbox(
+            "Station *(optional)*", ["All Stations"] + sorted(rdf["Substation"].dropna().unique().tolist()),
+            key="ra_station")
+    if station != "All Stations":
+        rdf = rdf[rdf["Substation"] == station]
+    scope = f"{station} ({region})" if station != "All Stations" else (
+        f"{subregion} ({region})" if subregion != "All Sub-Regions" else region)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Outages", f"{len(rdf):,}")
-    c2.metric("Total Duration (hrs)", f"{rdf['Duration_Hours'].sum():,.1f}")
-    c3.metric("Total Load Lost (MW)", f"{rdf['Last_Load_MW'].sum():,.1f}")
-    c4.metric("Substations Affected", f"{rdf['Substation'].nunique()}")
+    if rdf.empty:
+        st.info("No records for this selection.")
+        return
 
-    col1, col2 = st.columns(2)
-    with col1:
-        by_sub = rdf.groupby("Substation").agg(
-            Outages=("Substation", "size"),
-            Load_MW=("Last_Load_MW", "sum"),
-        ).reset_index().sort_values("Outages", ascending=False).head(15)
-        fig = px.bar(by_sub, x="Substation", y="Outages", color="Load_MW",
-                     title=f"Top Substations: {region}",
-                     color_continuous_scale=TCN_RED_SCALE)
-        fig.update_layout(height=400, xaxis_tickangle=-45, **TCN_CHART_LAYOUT)
-        fig.update_traces(marker_line_width=0)
+    last_label = "Equipment" if station != "All Stations" else "Substations"
+    last_value = rdf["Equipment"].nunique() if station != "All Stations" else rdf["Substation"].nunique()
+    kpi_grid([
+        kpi_card("Outages", f"{len(rdf):,}", icon="bolt", color=TCN_BLUE),
+        kpi_card("Total Duration", f"{rdf['Duration_Hours'].sum():,.1f}", "hrs", icon="clock", color=TCN_RED),
+        kpi_card("Load Lost", f"{rdf['Last_Load_MW'].sum():,.1f}", "MW", icon="power", color="#956400"),
+        kpi_card(last_label, f"{last_value}", icon="building", color="#1F6C9F"),
+    ])
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if station != "All Stations":
+            top = rdf.groupby("Equipment").agg(Outages=("Equipment", "size"), Load=("Last_Load_MW", "sum")).reset_index()
+            top = top.sort_values("Outages", ascending=False).head(15)
+            fig = px.bar(top, x="Outages", y="Equipment", orientation="h",
+                         title=f"Equipment Outages: {scope}", color="Load",
+                         color_continuous_scale=TCN_RED_SCALE)
+            fig.update_layout(height=420, yaxis=dict(autorange="reversed"), coloraxis_showscale=False, **TCN_CHART_LAYOUT)
+        else:
+            top = rdf.groupby("Substation").agg(Outages=("Substation", "size"), Load=("Last_Load_MW", "sum")).reset_index()
+            top = top.sort_values("Outages", ascending=False).head(15)
+            fig = px.bar(top, x="Substation", y="Outages", color="Load",
+                         title=f"Top Substations: {scope}", color_continuous_scale=TCN_RED_SCALE)
+            fig.update_layout(height=420, xaxis_tickangle=-45, coloraxis_showscale=False, **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        top_dur = rdf.groupby("Equipment")["Duration_Hours"].sum().sort_values(ascending=False).head(15).reset_index()
+        fig = px.bar(top_dur, x="Duration_Hours", y="Equipment", orientation="h",
+                     title=f"Longest Equipment Downtime: {scope}",
+                     color_discrete_sequence=[TCN_BLUE])
+        fig.update_layout(height=420, yaxis=dict(autorange="reversed"), **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
         st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        by_feeder = rdf.groupby("Feeder_33kV").agg(
-            Outages=("Feeder_33kV", "size"),
-            Duration=("Duration_Hours", "sum"),
-        ).reset_index().sort_values("Duration", ascending=False).head(15)
-        fig = px.bar(by_feeder, x="Duration", y="Feeder_33kV", orientation="h",
-                     title=f"Top Feeders by Duration: {region}",
-                     color_discrete_sequence=[TCN_COLORS[0]])
-        fig.update_layout(height=400, **TCN_CHART_LAYOUT)
-        fig.update_traces(marker_line_width=0)
+    c3, c4 = st.columns(2)
+    with c3:
+        by_class = rdf["Class"].value_counts().reset_index()
+        by_class.columns = ["Class", "Count"]
+        fig = px.pie(by_class, names="Class", values="Count", hole=0.45,
+                     title=f"Outage Classification: {scope}", color="Class", color_discrete_map=CLASS_COLORS)
+        fig.update_layout(height=380, **TCN_CHART_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
+    with c4:
+        by_weather = rdf["Weather_Condition"].value_counts().reset_index()
+        by_weather.columns = ["Weather", "Count"]
+        fig = px.pie(by_weather, names="Weather", values="Count", hole=0.45,
+                     title=f"Weather During Outages: {scope}",
+                     color_discrete_sequence=TCN_COLORS)
+        fig.update_layout(height=380, **TCN_CHART_LAYOUT)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader(f"Records: {region}")
-    display = rdf.copy()
-    display_cols = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display.columns}
-    display = display.rename(columns=display_cols)
-    show_cols = [c for c in DISPLAY_COLUMNS if c in display.columns]
-    st.dataframe(display[show_cols], use_container_width=True, height=400)
+    st.subheader(f"Records: {scope}")
+    cols = ["Substation", "Equipment", "Voltage_Level", "Equipment_Type", "Datetime_Off",
+            "Datetime_On", "Duration_Hours", "Status", "Class", "Last_Load_MW",
+            "Event_Indication", "Officer_Interruption", "Officer_Restoration", "Party_Responsible", "Weather_Condition", "Remarks"]
+    st.dataframe(rdf[cols], use_container_width=True, height=380)
+
+    # ── Generate Analysis panel ──
+    scope_chips = ""
+    for label, val in [("Region", region), ("Sub-Region", subregion), ("Station", station)]:
+        active = not val.startswith("All")
+        chip_bg = "rgba(200,30,40,0.14)" if active else "rgba(255,255,255,0.10)"
+        chip_bd = "rgba(224,110,106,0.45)" if active else "rgba(255,255,255,0.16)"
+        chip_fg = "#FFD9D6" if active else "#B9C4E0"
+        display = val if len(val) <= 42 else val[:40] + "…"
+        scope_chips += (
+            f'<span style="display:inline-flex;align-items:center;gap:5px;font-size:0.68rem;'
+            f'font-weight:600;padding:4px 10px;border-radius:999px;margin:0 6px 6px 0;'
+            f'background:{chip_bg};border:1px solid {chip_bd};color:{chip_fg};">'
+            f'<span style="opacity:0.6;">{label}</span> {display}</span>'
+        )
+
+    st.markdown(f"""
+    <div style="position:relative;margin-top:1.6rem;padding:1.5rem 1.6rem 1.2rem 1.6rem;
+                border-radius:18px;overflow:hidden;
+                background:linear-gradient(135deg, #12224a 0%, #1e3a7a 55%, #35204a 130%);
+                box-shadow:0 12px 36px rgba(14,28,61,0.35), inset 0 1px 0 rgba(255,255,255,0.10);">
+        <div style="position:absolute;top:-60px;right:-40px;width:220px;height:220px;border-radius:50%;
+                    background:radial-gradient(circle, rgba(200,30,40,0.35), transparent 70%);"></div>
+        <div style="display:flex;align-items:center;gap:0.9rem;margin-bottom:0.8rem;">
+            <div style="width:42px;height:42px;border-radius:11px;display:flex;align-items:center;
+                        justify-content:center;background:linear-gradient(135deg,{TCN_RED},#8f1620);
+                        box-shadow:0 4px 14px rgba(200,30,40,0.5);">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+            </div>
+            <div>
+                <div style="font-size:1.15rem;font-weight:700;color:white;line-height:1.2;">Generate Analysis</div>
+                <div style="font-size:0.72rem;color:#B9C4E0;letter-spacing:0.05em;">
+                    Export a full report for {scope} — {len(rdf):,} outage records
+                </div>
+            </div>
+        </div>
+        <div style="margin-bottom:0.2rem;">{scope_chips}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    rep_cols = ["Region", "SubRegion_ACC", "Substation", "Equipment", "Voltage_Level",
+                "Equipment_Type", "Datetime_Off", "Datetime_On", "Duration_Hours", "Status",
+                "Class", "Last_Load_MW", "Event_Indication", "Officer_Interruption", "Officer_Restoration", "Party_Responsible",
+                "Weather_Condition", "Remarks"]
+    overview = pd.DataFrame({
+        "Metric": ["Scope", "Total Outages", "Substations Affected", "Unique Equipment",
+                   "Total Duration (hrs)", "Avg Duration (hrs)", "Load Lost (MW)",
+                   "Ongoing Outages", "Forced", "Planned", "Emergency"],
+        "Value": [
+            scope, len(rdf), rdf["Substation"].nunique(), rdf["Equipment"].nunique(),
+            round(rdf["Duration_Hours"].sum(), 1),
+            round(rdf["Duration_Hours"].mean(), 2) if rdf["Duration_Hours"].notna().any() else 0,
+            round(rdf["Last_Load_MW"].sum(), 1), int((rdf["Status"] == "Ongoing").sum()),
+            int((rdf["Class"] == "Forced").sum()), int((rdf["Class"] == "Planned").sum()),
+            int((rdf["Class"] == "Emergency").sum()),
+        ],
+    })
+    sub_summary = rdf.groupby(["SubRegion_ACC", "Substation"]).agg(
+        Outages=("Substation", "size"),
+        Total_Hours=("Duration_Hours", "sum"),
+        Avg_Hours=("Duration_Hours", "mean"),
+        Load_Lost_MW=("Last_Load_MW", "sum"),
+        Unique_Equipment=("Equipment", "nunique"),
+    ).round(2).reset_index().sort_values("Outages", ascending=False)
+
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        overview.to_excel(writer, sheet_name="Overview", index=False)
+        sub_summary.to_excel(writer, sheet_name="Substation Summary", index=False)
+        rdf[rep_cols].to_excel(writer, sheet_name="Outage Records", index=False)
+
+    g1, g2, _ = st.columns([1, 1, 2])
+    with g1:
+        st.download_button(
+            "⚡ Generate Excel Report", buf.getvalue(),
+            f"TCN_Region_Analysis_{region.replace(' ', '_')}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary", use_container_width=True, key="ra_gen_xlsx",
+        )
+    with g2:
+        st.download_button(
+            "📄 Download CSV", rdf[rep_cols].to_csv(index=False).encode(),
+            f"TCN_Region_Analysis_{region.replace(' ', '_')}.csv", "text/csv",
+            use_container_width=True, key="ra_gen_csv",
+        )
+
+
+def show_equipment_analysis(df):
+    _eyebrow("Equipment", "#FBEAEA", TCN_RED)
+    st.header("Equipment Analysis")
+
+    # ── Drill-down selectors: Region → Sub-Region → Station → Type → Equipment ──
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        region = st.selectbox(
+            "Region", ["All Regions"] + sorted(df["Region"].dropna().unique().tolist()),
+            key="ea_region")
+    edf = df if region == "All Regions" else df[df["Region"] == region]
+    with s2:
+        subregion = st.selectbox(
+            "Sub-Region / ACC", ["All Sub-Regions"] + sorted(edf["SubRegion_ACC"].dropna().unique().tolist()),
+            key="ea_subregion")
+    if subregion != "All Sub-Regions":
+        edf = edf[edf["SubRegion_ACC"] == subregion]
+    with s3:
+        station = st.selectbox(
+            "Station", ["All Stations"] + sorted(edf["Substation"].dropna().unique().tolist()),
+            key="ea_station")
+    if station != "All Stations":
+        edf = edf[edf["Substation"] == station]
+
+    s4, s5 = st.columns(2)
+    with s4:
+        etype = st.selectbox(
+            "Equipment Type", ["All Types"] + sorted(edf["Equipment_Type"].dropna().unique().tolist()),
+            key="ea_etype")
+    if etype != "All Types":
+        edf = edf[edf["Equipment_Type"] == etype]
+    with s5:
+        equipment = st.selectbox(
+            "Equipment", ["All Equipment"] + sorted(edf["Equipment"].dropna().unique().tolist()),
+            key="ea_equipment")
+    if equipment != "All Equipment":
+        edf = edf[edf["Equipment"] == equipment]
+
+    if edf.empty:
+        st.info("No records for this selection.")
+        return
+
+    kpi_grid([
+        kpi_card("Outages", f"{len(edf):,}", icon="bolt", color=TCN_BLUE),
+        kpi_card("Unique Equipment", f"{edf['Equipment'].nunique():,}", icon="pulse", color="#346538"),
+        kpi_card("Total Downtime", f"{edf['Duration_Hours'].sum():,.1f}", "hrs", icon="clock", color=TCN_RED),
+        kpi_card("Load Lost", f"{edf['Last_Load_MW'].sum():,.1f}", "MW", icon="power", color="#956400"),
+    ])
+
+    c1, c2 = st.columns(2)
+    with c1:
+        top = edf.groupby("Equipment").size().sort_values(ascending=False).head(15).reset_index(name="Outages")
+        fig = px.bar(top, x="Outages", y="Equipment", orientation="h",
+                     title="Most Frequent Equipment Outages",
+                     color_discrete_sequence=[TCN_RED])
+        fig.update_layout(height=440, yaxis=dict(autorange="reversed"), **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        top_dur = edf.groupby("Equipment")["Duration_Hours"].sum().sort_values(ascending=False).head(15).reset_index()
+        fig = px.bar(top_dur, x="Duration_Hours", y="Equipment", orientation="h",
+                     title="Longest Cumulative Downtime (hrs)",
+                     color_discrete_sequence=[TCN_BLUE])
+        fig.update_layout(height=440, yaxis=dict(autorange="reversed"), **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Repeat offenders
+    st.subheader("Repeat Offenders (3+ outages)")
+    rep = edf.groupby(["Region", "Substation", "Equipment", "Voltage_Level"]).agg(
+        Outages=("Equipment", "size"),
+        Total_Hours=("Duration_Hours", "sum"),
+        Load_MW=("Last_Load_MW", "sum"),
+    ).reset_index()
+    rep = rep[rep["Outages"] >= 3].sort_values("Outages", ascending=False)
+    if rep.empty:
+        st.caption("No equipment with 3 or more outages in the current filter window.")
+    else:
+        st.dataframe(rep, use_container_width=True, height=320)
+
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        by_class = edf["Class"].value_counts().reset_index()
+        by_class.columns = ["Class", "Count"]
+        fig = px.pie(by_class, names="Class", values="Count", hole=0.45,
+                     title="Outage Classification", color="Class",
+                     color_discrete_map=CLASS_COLORS)
+        fig.update_layout(height=380, **TCN_CHART_LAYOUT)
+        st.plotly_chart(fig, use_container_width=True)
+    with c4:
+        by_v = edf.groupby(["Voltage_Level", "Class"]).size().reset_index(name="Count")
+        fig = px.bar(by_v, x="Voltage_Level", y="Count", color="Class", barmode="group",
+                     title="Voltage Level vs Outage Class", color_discrete_map=CLASS_COLORS)
+        fig.update_layout(height=380, **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+    with c5:
+        hourly = edf.dropna(subset=["Datetime_Off"]).copy()
+        hourly["Hour"] = hourly["Datetime_Off"].dt.hour
+        by_h = hourly.groupby("Hour").size().reset_index(name="Outages")
+        fig = px.bar(by_h, x="Hour", y="Outages", title="Outages by Hour of Day",
+                     color_discrete_sequence=[TCN_BLUE])
+        fig.update_layout(height=380, **TCN_CHART_LAYOUT)
+        fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+        _style_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
+
+    if equipment != "All Equipment":
+        st.subheader(f"Outage History: {equipment}")
+        hist_cols = ["Datetime_Off", "Datetime_On", "Duration_Hours", "Status", "Class",
+                     "Last_Load_MW", "Event_Indication", "Officer_Interruption", "Officer_Restoration", "Party_Responsible",
+                     "Weather_Condition", "Remarks"]
+        st.dataframe(edf.sort_values("Datetime_Off")[hist_cols],
+                     use_container_width=True, height=320)
+
+    # ── Generate Analysis panel ──
+    scope_chips = ""
+    for label, val in [("Region", region), ("Sub-Region", subregion), ("Station", station),
+                       ("Type", etype), ("Equipment", equipment)]:
+        active = not val.startswith("All")
+        chip_bg = "rgba(200,30,40,0.14)" if active else "rgba(255,255,255,0.10)"
+        chip_bd = "rgba(224,110,106,0.45)" if active else "rgba(255,255,255,0.16)"
+        chip_fg = "#FFD9D6" if active else "#B9C4E0"
+        display = val if len(val) <= 42 else val[:40] + "…"
+        scope_chips += (
+            f'<span style="display:inline-flex;align-items:center;gap:5px;font-size:0.68rem;'
+            f'font-weight:600;padding:4px 10px;border-radius:999px;margin:0 6px 6px 0;'
+            f'background:{chip_bg};border:1px solid {chip_bd};color:{chip_fg};">'
+            f'<span style="opacity:0.6;">{label}</span> {display}</span>'
+        )
+
+    st.markdown(f"""
+    <div style="position:relative;margin-top:1.6rem;padding:1.5rem 1.6rem 1.2rem 1.6rem;
+                border-radius:18px;overflow:hidden;
+                background:linear-gradient(135deg, #12224a 0%, #1e3a7a 55%, #35204a 130%);
+                box-shadow:0 12px 36px rgba(14,28,61,0.35), inset 0 1px 0 rgba(255,255,255,0.10);">
+        <div style="position:absolute;top:-60px;right:-40px;width:220px;height:220px;border-radius:50%;
+                    background:radial-gradient(circle, rgba(200,30,40,0.35), transparent 70%);"></div>
+        <div style="display:flex;align-items:center;gap:0.9rem;margin-bottom:0.8rem;">
+            <div style="width:42px;height:42px;border-radius:11px;display:flex;align-items:center;
+                        justify-content:center;background:linear-gradient(135deg,{TCN_RED},#8f1620);
+                        box-shadow:0 4px 14px rgba(200,30,40,0.5);">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+            </div>
+            <div>
+                <div style="font-size:1.15rem;font-weight:700;color:white;line-height:1.2;">Generate Analysis</div>
+                <div style="font-size:0.72rem;color:#B9C4E0;letter-spacing:0.05em;">
+                    Export a full report for the current selection — {len(edf):,} outage records
+                </div>
+            </div>
+        </div>
+        <div style="margin-bottom:0.2rem;">{scope_chips}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Build the report workbook in memory
+    rep_cols = ["Region", "SubRegion_ACC", "Substation", "Equipment", "Voltage_Level",
+                "Equipment_Type", "Datetime_Off", "Datetime_On", "Duration_Hours", "Status",
+                "Class", "Last_Load_MW", "Event_Indication", "Officer_Interruption", "Officer_Restoration", "Party_Responsible",
+                "Weather_Condition", "Remarks"]
+    overview = pd.DataFrame({
+        "Metric": ["Scope", "Total Outages", "Unique Equipment", "Total Downtime (hrs)",
+                   "Avg Duration (hrs)", "Load Lost (MW)", "Ongoing Outages",
+                   "Forced", "Planned", "Emergency"],
+        "Value": [
+            " / ".join(v for v in [region, subregion, station, etype, equipment] if not v.startswith("All")) or "All data",
+            len(edf), edf["Equipment"].nunique(), round(edf["Duration_Hours"].sum(), 1),
+            round(edf["Duration_Hours"].mean(), 2) if edf["Duration_Hours"].notna().any() else 0,
+            round(edf["Last_Load_MW"].sum(), 1), int((edf["Status"] == "Ongoing").sum()),
+            int((edf["Class"] == "Forced").sum()), int((edf["Class"] == "Planned").sum()),
+            int((edf["Class"] == "Emergency").sum()),
+        ],
+    })
+    eq_summary = edf.groupby(["Region", "Substation", "Equipment", "Voltage_Level", "Equipment_Type"]).agg(
+        Outages=("Equipment", "size"),
+        Total_Hours=("Duration_Hours", "sum"),
+        Avg_Hours=("Duration_Hours", "mean"),
+        Load_Lost_MW=("Last_Load_MW", "sum"),
+    ).round(2).reset_index().sort_values("Outages", ascending=False)
+
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        overview.to_excel(writer, sheet_name="Overview", index=False)
+        eq_summary.to_excel(writer, sheet_name="Equipment Summary", index=False)
+        edf[rep_cols].to_excel(writer, sheet_name="Outage Records", index=False)
+
+    g1, g2, _ = st.columns([1, 1, 2])
+    with g1:
+        st.download_button(
+            "⚡ Generate Excel Report", buf.getvalue(),
+            "TCN_Equipment_Analysis.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary", use_container_width=True, key="ea_gen_xlsx",
+        )
+    with g2:
+        st.download_button(
+            "📄 Download CSV", edf[rep_cols].to_csv(index=False).encode(),
+            "TCN_Equipment_Analysis.csv", "text/csv",
+            use_container_width=True, key="ea_gen_csv",
+        )
+
+
+def show_hierarchy(df):
+    _eyebrow("Network", "#F3EDE1", "#956400")
+    st.header("Network Hierarchy")
+    h = load_hierarchy()
+    if h.empty:
+        st.warning("Hierarchy file not available.")
+        return
+
+    region = st.selectbox("Region", sorted(h["Region"].dropna().unique()))
+    hr = h[h["Region"] == region]
+
+    counts = df[df["Region"].str.title() == region.title()]
+    outage_by_sub = counts.groupby("Substation").size()
+
+    kpi_grid([
+        kpi_card("Sub-Regions", f"{hr['Sub-Region'].nunique()}", icon="chart", color=TCN_BLUE),
+        kpi_card("Transmission Stations", f"{hr['Transmission Station'].nunique()}", icon="tower", color=TCN_RED),
+        kpi_card("Sub-Stations", f"{hr['Sub-Station'].nunique()}", icon="building", color="#346538"),
+        kpi_card("Outages in Region", f"{len(counts):,}", icon="bolt", color="#956400"),
+    ])
+
+    for subregion in sorted(hr["Sub-Region"].dropna().unique()):
+        sr = hr[hr["Sub-Region"] == subregion]
+        with st.expander(f"**{subregion}** — {sr['Transmission Station'].nunique()} stations, {sr['Sub-Station'].nunique()} substations"):
+            for ts in sorted(sr["Transmission Station"].dropna().unique()):
+                subs = sr[sr["Transmission Station"] == ts]["Sub-Station"].dropna().tolist()
+                n_out = int(outage_by_sub.filter(like=ts.split()[0]).sum()) if len(ts.split()) else 0
+                st.markdown(f"**⚡ {ts}**" + (f" · `{n_out} outages`" if n_out else ""))
+                for s in subs:
+                    if s and s.lower() != "nan":
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;└ {s}")
+
+
+def show_report_outage(user):
+    _eyebrow("Entry", "#E8EEF7", TCN_BLUE)
+    st.header("Report Outage")
+    st.caption("Log a new 330kV / 132kV equipment outage. It is appended to the compiled dataset immediately.")
+
+    full = load_data()
+    catalog = load_catalog()
+    use_catalog = not catalog.empty
+    regions = sorted(catalog["Region"].unique()) if use_catalog else sorted(full["Region"].dropna().unique())
+
+    # ── Location & equipment selectors (reactive, cascading, catalog-driven) ──
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if user.get("region"):
+            region = st.selectbox("Region", [user["region"]], disabled=True)
+        else:
+            region = st.selectbox("Region", regions)
+        rcat = catalog[catalog["Region"] == region] if use_catalog else pd.DataFrame()
+        if not rcat.empty:
+            subregions = sorted(rcat["SubRegion"].dropna().unique())
+        else:
+            subregions = sorted(full.loc[full["Region"] == region, "SubRegion_ACC"].dropna().unique())
+        subregion = st.selectbox("Sub-Region / ACC", subregions + ["Other…"])
+        subregion_other = ""
+        if subregion == "Other…":
+            subregion_other = st.text_input("Specify Sub-Region *")
+    with c2:
+        if not rcat.empty:
+            if subregion != "Other…":
+                known_subs = sorted(rcat.loc[rcat["SubRegion"] == subregion, "Substation"].unique())
+            else:
+                known_subs = sorted(rcat["Substation"].unique())
+        else:
+            known_subs = sorted(full.loc[full["Region"] == region, "Substation"].dropna().unique())
+        substation = st.selectbox("Substation", known_subs + ["Other…"])
+        substation_other = ""
+        if substation == "Other…":
+            substation_other = st.text_input("Specify Substation *")
+    with c3:
+        equip_type = st.selectbox(
+            "Equipment Type",
+            ["Line", "Transformer", "Feeder", "Reactor", "Bus", "Other"],
+        )
+
+    # Equipment options: catalog first (station → region), then history, else manual
+    equip_options, scope_note = [], ""
+    if substation != "Other…" and equip_type != "Other":
+        if use_catalog and equip_type in ("Line", "Transformer"):
+            scope = catalog[(catalog["Substation"] == substation) & (catalog["Equipment_Type"] == equip_type)]
+            if not scope.empty:
+                scope_note = f"{equip_type}s registered at {substation}."
+            else:
+                scope = catalog[(catalog["Region"] == region) & (catalog["Equipment_Type"] == equip_type)]
+                if not scope.empty:
+                    scope_note = f"No {equip_type.lower()}s registered at {substation} — showing all {equip_type.lower()}s in {region}."
+            equip_options = sorted(scope["Equipment"].unique().tolist())
+        if not equip_options:
+            hist = full[(full["Region"] == region) & (full["Equipment_Type"] == equip_type)]
+            if not hist.empty:
+                equip_options = sorted(hist["Equipment"].dropna().unique().tolist())
+                scope_note = f"{equip_type}s previously recorded in {region} outage history."
+
+    equipment_choice = st.selectbox(
+        "Equipment *",
+        equip_options + ["Other (type manually)…"],
+        help=scope_note or None,
+    )
+    if scope_note:
+        st.caption(scope_note)
+    equipment_other = ""
+    if equipment_choice == "Other (type manually)…":
+        equipment_other = st.text_input(
+            "Specify Equipment *",
+            placeholder="e.g. 60MVA 132/33kV Transformer TR1 (3KNE-TR1)",
+        )
+    equipment = equipment_other.strip() if equipment_choice == "Other (type manually)…" else equipment_choice
+
+    st.divider()
+
+    # ── Remaining details ──
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        outage_class = st.selectbox("Class", ["Forced", "Emergency", "Planned"])
+    with c5:
+        load_mw = st.number_input("Last Load (MW)", min_value=0.0, step=0.1, format="%.1f")
+    with c6:
+        weather = st.selectbox("Weather Condition", ["Clear", "Rainy", "Windy", "Drizzling", "Cloudy"])
+
+    c7, c8 = st.columns(2)
+    with c7:
+        st.markdown("**Time Off**")
+        date_off = st.date_input("Date Off")
+        t1, t2 = st.columns(2)
+        hour_off = t1.number_input("Hour Off", 0, 23, 0)
+        minute_off = t2.number_input("Minute Off", 0, 59, 0)
+        officer_off = st.text_input("Officer (Interruption)",
+                                    placeholder="Officer on duty at interruption")
+    with c8:
+        st.markdown("**Time On** *(leave unchecked if still out)*")
+        restored = st.checkbox("Equipment restored")
+        date_on = st.date_input("Date On", disabled=not restored)
+        t3, t4 = st.columns(2)
+        hour_on = t3.number_input("Hour On", 0, 23, 0, disabled=not restored)
+        minute_on = t4.number_input("Minute On", 0, 59, 0, disabled=not restored)
+        officer_on = st.text_input("Officer (Restoration)",
+                                   placeholder="Officer on duty at restoration",
+                                   disabled=not restored)
+
+    c9, c10 = st.columns(2)
+    with c9:
+        event = st.text_input("Event Indication", placeholder="e.g. Distance Protection, Frequency Control")
+    with c10:
+        party = st.selectbox("Party Responsible", ["TCN", "Disco", "Generation Company", "Weather", "Vandalism"])
+    remarks = st.text_area("Remarks", placeholder="Describe the event, protection operations, restoration steps…")
+
+    if st.button("Submit Outage Report", type="primary"):
+        if not equipment:
+            st.error("Equipment is required — pick one from the list or type it under 'Other'.")
+        elif subregion == "Other…" and not subregion_other.strip():
+            st.error("Please specify the Sub-Region.")
+        elif substation == "Other…" and not substation_other.strip():
+            st.error("Please specify the Substation.")
+        else:
+            duration = None
+            d_on = h_on = m_on = None
+            if restored:
+                dt_off = pd.Timestamp(date_off) + timedelta(hours=int(hour_off), minutes=int(minute_off))
+                dt_on = pd.Timestamp(date_on) + timedelta(hours=int(hour_on), minutes=int(minute_on))
+                if dt_on < dt_off:
+                    st.error("Restoration time is before the outage time.")
+                    return
+                mins = int((dt_on - dt_off).total_seconds() // 60)
+                duration = f"{mins // 60}:{mins % 60:02d}"
+                d_on = date_on.strftime("%d/%m/%Y")
+                h_on, m_on = int(hour_on), int(minute_on)
+            row = {
+                "Region": region,
+                "SubRegion_ACC": subregion_other.strip() if subregion == "Other…" else subregion,
+                "Substation": substation_other.strip() if substation == "Other…" else substation,
+                "Equipment": equipment.strip(),
+                "Date_Off": date_off.strftime("%d/%m/%Y"),
+                "Hour_Off": int(hour_off),
+                "Minute_Off": int(minute_off),
+                "Date_On": d_on,
+                "Hour_On": h_on,
+                "Minute_On": m_on,
+                "Duration": duration,
+                "Class": outage_class,
+                "Last_Load_MW": load_mw if load_mw > 0 else None,
+                "Event_Indication": event.strip() or None,
+                "Officer_Interruption": officer_off.strip() or None,
+                "Officer_Restoration": officer_on.strip() if restored else None,
+                "Party_Responsible": party,
+                "Weather_Condition": weather,
+                "Remarks": remarks.strip() or None,
+            }
+            try:
+                existing = pd.read_excel(DATA_FILE, sheet_name=0)
+                combined = pd.concat([existing, pd.DataFrame([row])], ignore_index=True)
+                with pd.ExcelWriter(DATA_FILE, engine="openpyxl") as writer:
+                    combined.to_excel(writer, sheet_name="Outages", index=False)
+                load_data.clear()
+                st.success(f"Outage recorded for {row['Equipment']} at {row['Substation']} ({region}).")
+            except PermissionError:
+                st.error("Data file is open in Excel — close it and submit again.")
+            except Exception as exc:
+                st.error(f"Could not save record: {exc}")
 
 
 def show_export(df):
+    _eyebrow("Export", "#F3EDE1", "#956400")
     st.header("Export Reports")
 
-    export_type = st.radio("Export Format", ["Excel (.xlsx)", "CSV (.csv)"], horizontal=True)
+    e1, e2 = st.columns([1.2, 1])
+    with e1:
+        dmin = df["Datetime_Off"].min()
+        dmax = df["Datetime_Off"].max()
+        export_range = st.date_input(
+            "📅 Export Date Range",
+            value=(dmin.date(), dmax.date()) if pd.notna(dmin) else (),
+            key="exp_date",
+        )
+    with e2:
+        fmt = st.radio("Export Format", ["Excel (.xlsx)", "CSV (.csv)"], horizontal=True)
 
-    if st.button("Generate Export"):
-        if export_type == "CSV (.csv)":
-            display = df.copy()
-            display_cols = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display.columns}
-            display = display.rename(columns=display_cols)
-            csv = display.to_csv(index=False)
-            st.download_button("Download CSV", csv, "tcn_outage_report.csv", "text/csv")
-        else:
-            buf = io.BytesIO()
-            display = df.copy()
-            display_cols = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display.columns}
-            display = display.rename(columns=display_cols)
+    if isinstance(export_range, tuple) and len(export_range) == 2:
+        e_start, e_end = export_range
+        df = df[
+            (df["Datetime_Off"] >= pd.Timestamp(e_start))
+            & (df["Datetime_Off"] < pd.Timestamp(e_end) + timedelta(days=1))
+        ]
+    st.caption(f"{len(df):,} records in the selected period")
+    if df.empty:
+        st.info("No records in the selected date range.")
+        return
+    cols = ["Region", "SubRegion_ACC", "Substation", "Equipment", "Voltage_Level",
+            "Equipment_Type", "Datetime_Off", "Datetime_On", "Duration_Hours", "Status",
+            "Class", "Last_Load_MW", "Event_Indication", "Officer_Interruption", "Officer_Restoration", "Party_Responsible",
+            "Weather_Condition", "Remarks"]
+    out = df[cols]
 
-            with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-                display.to_excel(writer, sheet_name="All Records", index=False)
-
-                summary = df.groupby("Region").agg(
-                    Total_Outages=("Region", "size"),
-                    Total_Duration_Hrs=("Duration_Hours", "sum"),
-                    Avg_Duration_Hrs=("Duration_Hours", "mean"),
-                    Total_Load_Lost_MW=("Last_Load_MW", "sum"),
-                    Unique_Substations=("Substation", "nunique"),
-                ).reset_index()
-                summary.to_excel(writer, sheet_name="Summary by Region", index=False)
-
-                if df["Date_Off"].notna().any():
-                    daily = df.groupby(df["Date_Off"].dt.date).agg(
-                        Total_Outages=("Date_Off", "size"),
-                        Total_Duration_Hrs=("Duration_Hours", "sum"),
-                        Total_Load_Lost_MW=("Last_Load_MW", "sum"),
-                    ).reset_index()
-                    daily.columns = ["Date", "Total_Outages", "Total_Duration_Hrs", "Total_Load_Lost_MW"]
-                    daily.to_excel(writer, sheet_name="Daily Summary", index=False)
-
-                for ws_name in writer.sheets:
-                    ws = writer.sheets[ws_name]
-                    ws.set_column(0, 20, 18)
-
-            st.download_button("Download Excel", buf.getvalue(), "tcn_outage_report.xlsx",
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if fmt.startswith("Excel"):
+        buf = BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            out.to_excel(writer, sheet_name="Outages", index=False)
+            summary = df.groupby("Region").agg(
+                Total_Outages=("Region", "size"),
+                Total_Duration_Hrs=("Duration_Hours", "sum"),
+                Avg_Duration_Hrs=("Duration_Hours", "mean"),
+                Total_Load_Lost_MW=("Last_Load_MW", "sum"),
+                Unique_Substations=("Substation", "nunique"),
+                Unique_Equipment=("Equipment", "nunique"),
+            ).round(2).reset_index()
+            summary.to_excel(writer, sheet_name="Summary", index=False)
+        st.download_button("Download Excel Report", buf.getvalue(),
+                           "TCN_Outage_Report.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           type="primary")
+    else:
+        st.download_button("Download CSV", out.to_csv(index=False).encode(),
+                           "TCN_Outage_Report.csv", "text/csv", type="primary")
 
     st.subheader("Summary Statistics")
     summary = df.groupby("Region").agg(
@@ -1273,475 +1766,158 @@ def show_export(df):
         Avg_Duration_Hrs=("Duration_Hours", "mean"),
         Total_Load_Lost_MW=("Last_Load_MW", "sum"),
         Unique_Substations=("Substation", "nunique"),
-    ).reset_index().sort_values("Total_Outages", ascending=False)
-    summary["Total_Duration_Hrs"] = summary["Total_Duration_Hrs"].round(1)
-    summary["Avg_Duration_Hrs"] = summary["Avg_Duration_Hrs"].round(2)
-    summary["Total_Load_Lost_MW"] = summary["Total_Load_Lost_MW"].round(1)
+        Unique_Equipment=("Equipment", "nunique"),
+    ).round(2).sort_values("Total_Outages", ascending=False)
     st.dataframe(summary, use_container_width=True)
 
 
-def show_outage_entry():
-    st.header("Report New Outage")
-    st.markdown("Select location and equipment using the dropdowns, then fill in the outage details below.")
-
-    # --- Cascading selectors OUTSIDE the form so they trigger reruns ---
-    st.subheader("Location")
-    loc1, loc2 = st.columns(2)
-    region = loc1.selectbox("Region", options=sorted(SUBSTATION_EQUIPMENT.keys()), key="entry_region")
-
-    subregions = sorted(SUBSTATION_EQUIPMENT.get(region, {}).keys())
-    sub_acc = loc2.selectbox("SubRegion / ACC", options=subregions, key="entry_sub")
-
-    loc3, loc4 = st.columns(2)
-    substations = get_substations_for(region, sub_acc)
-    substation = loc3.selectbox("Substation", options=substations, key="entry_station")
-
-    suggested_discos = REGION_DISCO_MAP.get(region, DISCOS)
-    all_discos = suggested_discos + [d for d in DISCOS if d not in suggested_discos]
-    disco = loc4.selectbox("Disco", options=all_discos, key="entry_disco")
-
-    st.divider()
-    st.subheader("Equipment")
-    eq1, eq2 = st.columns(2)
-    equip_type = eq1.selectbox("Equipment Type", options=EQUIPMENT_TYPES, key="entry_equip_type")
-
-    equip_list = get_equipment_list(region, sub_acc, substation, equip_type)
-    if equip_list:
-        equipment = eq2.selectbox("Equipment", options=equip_list, key="entry_equip")
-    else:
-        equipment = eq2.text_input("Equipment (specify)", key="entry_equip_text")
-
-    feeder = st.text_input("33kV Feeder Name (if applicable)")
-
-    # --- Remaining fields inside the form for batch submission ---
-    st.divider()
-    with st.form("outage_entry", clear_on_submit=True):
-        st.subheader("Outage Timing")
-        t1, t2, t3, t4 = st.columns(4)
-        date_off = t1.date_input("Date Off")
-        time_off = t2.time_input("Time Off")
-        date_on = t3.date_input("Date On")
-        time_on = t4.time_input("Time On")
-
-        t5, t6 = st.columns(2)
-        duration = t5.text_input("Duration (H:mm)", placeholder="01:30")
-        outage_class = t6.selectbox("Outage Class", options=OUTAGE_CLASSES)
-
-        st.divider()
-        st.subheader("Event Details")
-        e1, e2, e3 = st.columns(3)
-        load_mw = e1.number_input("Last Load (MW)", min_value=0.0, step=0.1)
-        frequency = e2.number_input("Frequency (Hz)", min_value=0.0, max_value=100.0, value=50.0, step=0.01)
-        event = e3.selectbox("Event / Indication", options=EVENT_INDICATIONS)
-
-        e4, e5, e6 = st.columns(3)
-        officer_int = e4.text_input("Officer (Interruption)")
-        officer_res = e5.text_input("Officer (Restoration)")
-        weather = e6.selectbox("Weather Condition", options=WEATHER_CONDITIONS)
-
-        remarks = st.text_area("Remarks")
-
-        submitted = st.form_submit_button("Submit Outage Report", type="primary")
-        if submitted:
-            if not substation or not region:
-                st.error("Region and Substation are required.")
-            else:
-                equip_name = equipment if equipment else ""
-                equip_full = f"[{equip_type}] {equip_name}" if equip_name else equip_type
-                new_row = pd.DataFrame([{
-                    "Disco": disco,
-                    "Region": region,
-                    "SubRegion_ACC": sub_acc,
-                    "Substation": substation,
-                    "Feeder_33kV": feeder,
-                    "Equipment_Type": equip_type,
-                    "Equipment": equip_name,
-                    "Date_Off": date_off.strftime("%d/%m/%Y"),
-                    "Hour_Off": f"{time_off.hour:02d}:00:00",
-                    "Minute_Off": f"00:{time_off.minute:02d}:00",
-                    "Date_On": date_on.strftime("%d/%m/%Y"),
-                    "Hour_On": f"{time_on.hour:02d}:00:00",
-                    "Minute_On": f"00:{time_on.minute:02d}:00",
-                    "Duration": duration or "00:00",
-                    "Class": outage_class,
-                    "Last_Load_MW": load_mw,
-                    "Frequency_Hz": frequency,
-                    "Event_Indication": event,
-                    "Officer_Interruption": officer_int,
-                    "Officer_Restoration": officer_res,
-                    "Weather_Condition": weather,
-                    "Remarks": remarks,
-                }])
-                manual_file = UPLOADS_DIR / "manual_entries.csv"
-                if manual_file.exists():
-                    existing_df = pd.read_csv(manual_file)
-                    combined = pd.concat([existing_df, new_row], ignore_index=True)
+def show_upload():
+    _eyebrow("Admin", "#FBEAEA", TCN_RED)
+    st.header("Upload Data")
+    st.caption(
+        "Replace the compiled outage dataset. The file must contain the standard columns: "
+        "Region, SubRegion_ACC, Substation, Equipment, Date_Off, Hour_Off, Minute_Off, "
+        "Date_On, Hour_On, Minute_On, Duration, Class, Last_Load_MW, Event_Indication, "
+        "Party_Responsible, Weather_Condition, Remarks"
+    )
+    up = st.file_uploader("Upload compiled outages workbook (.xlsx)", type=["xlsx"])
+    if up is not None:
+        try:
+            new = pd.read_excel(up, sheet_name=0)
+            new.columns = [c.strip() for c in new.columns]
+            required = {"Region", "Substation", "Equipment", "Date_Off", "Class"}
+            missing = required - set(new.columns)
+            if missing:
+                st.error(f"Missing required columns: {', '.join(sorted(missing))}")
+                return
+            st.dataframe(new.head(10), use_container_width=True)
+            st.caption(f"{len(new):,} rows detected")
+            mode = st.radio("Import mode", ["Replace existing data", "Append to existing data"], horizontal=True)
+            if st.button("Confirm Import", type="primary"):
+                if mode.startswith("Append"):
+                    existing = pd.read_excel(DATA_FILE, sheet_name=0)
+                    combined = pd.concat([existing, new], ignore_index=True)
                 else:
-                    combined = new_row
-                combined.to_csv(manual_file, index=False)
-                load_all_data.clear()
-                st.success(f"Outage report submitted: {equip_full} at {substation} ({region} / {sub_acc})")
+                    combined = new
+                with pd.ExcelWriter(DATA_FILE, engine="openpyxl") as writer:
+                    combined.to_excel(writer, sheet_name="Outages", index=False)
+                load_data.clear()
+                st.success(f"Imported {len(new):,} rows ({mode.split()[0].lower()}). Data reloaded.")
+                st.rerun()
+        except Exception as exc:
+            st.error(f"Could not read workbook: {exc}")
+
+
+def show_users(user):
+    _eyebrow("Admin", "#FBEAEA", TCN_RED)
+    st.header("User Management")
+    users = load_users()
+
+    rows = [{"Username": k, "Name": v["name"], "Role": v["role"], "Region": v["region"] or "All"}
+            for k, v in users.items()]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.subheader("Add User")
+    with st.form("add_user"):
+        c1, c2 = st.columns(2)
+        with c1:
+            uname = st.text_input("Username")
+            pw = st.text_input("Password", type="password")
+        with c2:
+            name = st.text_input("Full Name")
+            role = st.selectbox("Role", ["operator", "admin"])
+        region = st.selectbox("Region scope (operators)", ["All"] + sorted(load_data()["Region"].dropna().unique().tolist()))
+        if st.form_submit_button("Create User", type="primary"):
+            if not uname or not pw:
+                st.error("Username and password are required.")
+            elif uname in users:
+                st.error("Username already exists.")
+            else:
+                users[uname.strip()] = {
+                    "password": _hash(pw), "role": role, "name": name or uname,
+                    "region": None if region == "All" or role == "admin" else region,
+                }
+                save_users(users)
+                st.success(f"User '{uname}' created.")
                 st.rerun()
 
-
-def show_upload():
-    st.header("Upload Files")
-    st.markdown(
-        "Upload **Excel** (.xlsx/.xlsm), **CSV** (.csv), or **Word** (.docx) files. "
-        "Files with the standard TCN outage columns (Disco, Region, Substation, etc.) "
-        "will be parsed automatically."
-    )
-
-    uploaded_files = st.file_uploader(
-        "Choose files to upload",
-        type=["xlsx", "xlsm", "csv", "docx"],
-        accept_multiple_files=True,
-    )
-
-    if uploaded_files:
-        for uf in uploaded_files:
-            dest = UPLOADS_DIR / uf.name
-            st.markdown(f"**{uf.name}** ({uf.size / 1024:.1f} KB)")
-
-            suffix = Path(uf.name).suffix.lower()
-            preview_rows = []
-
-            if suffix in (".xlsx", ".xlsm"):
-                tmp = UPLOADS_DIR / f"_tmp_{uf.name}"
-                tmp.write_bytes(uf.getvalue())
-                preview_rows = parse_excel_file(tmp)
-                tmp.unlink(missing_ok=True)
-            elif suffix == ".csv":
-                tmp = UPLOADS_DIR / f"_tmp_{uf.name}"
-                tmp.write_bytes(uf.getvalue())
-                preview_rows = parse_csv_file(tmp)
-                tmp.unlink(missing_ok=True)
-            elif suffix == ".docx":
-                tmp = UPLOADS_DIR / f"_tmp_{uf.name}"
-                tmp.write_bytes(uf.getvalue())
-                preview_rows = parse_word_file(tmp)
-                if not preview_rows:
-                    from docx import Document as DocxDocument
-                    try:
-                        doc = DocxDocument(tmp)
-                        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-                        if text:
-                            with st.expander(f"Text content from {uf.name}"):
-                                st.text_area("Document text", text, height=300, disabled=True)
-                    except Exception:
-                        pass
-                tmp.unlink(missing_ok=True)
-
-            if preview_rows:
-                preview_df = pd.concat(preview_rows, ignore_index=True)
-                preview_display = preview_df.copy()
-                col_map = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in preview_display.columns}
-                preview_display = preview_display.rename(columns=col_map)
-                show = [c for c in DISPLAY_COLUMNS if c in preview_display.columns]
-                st.success(f"Found **{len(preview_df)}** outage records")
-                st.dataframe(preview_display[show], use_container_width=True, height=250)
-            elif suffix != ".docx":
-                st.warning(f"No outage records found in {uf.name}.")
-
-        if st.button("Save Uploaded Files", type="primary"):
-            saved = []
-            for uf in uploaded_files:
-                dest = UPLOADS_DIR / uf.name
-                dest.write_bytes(uf.getvalue())
-                saved.append(uf.name)
-            load_all_data.clear()
-            st.success(f"Saved {len(saved)} file(s): {', '.join(saved)}")
+    st.subheader("Delete User")
+    deletable = [u for u in users if u != user["username"]]
+    if deletable:
+        target = st.selectbox("Select user", deletable)
+        if st.button("Delete User"):
+            users.pop(target, None)
+            save_users(users)
+            st.success(f"User '{target}' deleted.")
             st.rerun()
 
-    st.divider()
-    st.subheader("Manage Uploaded Files")
-    existing = sorted(UPLOADS_DIR.glob("*"))
-    existing = [f for f in existing if f.is_file() and not f.name.startswith("_tmp_")]
-    if existing:
-        for f in existing:
-            col1, col2, col3 = st.columns([4, 1, 1])
-            col1.text(f.name)
-            col2.text(f"{f.stat().st_size / 1024:.1f} KB")
-            if col3.button("Remove", key=f"rm_{f.name}"):
-                f.unlink()
-                load_all_data.clear()
-                st.rerun()
-    else:
-        st.info("No uploaded files yet.")
 
-
-def show_hierarchy_browser():
-    st.header("TCN Network Hierarchy")
-    st.markdown("Browse all regions, sub-regions/ACCs, substations, and their equipment.")
-
-    view_mode = st.radio("View", ["By Region", "Full Equipment Table"], horizontal=True)
-
-    if view_mode == "By Region":
-        region = st.selectbox("Select Region", sorted(SUBSTATION_EQUIPMENT.keys()), key="hier_region")
-        subregions = SUBSTATION_EQUIPMENT[region]
-        for sub_name in sorted(subregions.keys()):
-            stations = subregions[sub_name]
-            with st.expander(f"{sub_name} ({len(stations)} substations)", expanded=True):
-                for s_name in sorted(stations.keys()):
-                    equip = stations[s_name]
-                    if not equip:
-                        st.markdown(f"**{s_name}**")
-                        continue
-                    total_equip = sum(len(v) for v in equip.values())
-                    st.markdown(f"**{s_name}** ({total_equip} equipment)")
-                    for etype in ["Transmission Line", "Transformer", "Reactor", "Capacitor Bank"]:
-                        items = equip.get(etype, [])
-                        if items:
-                            for item in items:
-                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;`{etype[:5]}` {item}")
-    else:
-        rows = []
-        for region, subs in sorted(SUBSTATION_EQUIPMENT.items()):
-            for sub, stations in sorted(subs.items()):
-                for station, equip in sorted(stations.items()):
-                    if not equip:
-                        rows.append({"Region": region, "SubRegion/ACC": sub, "Substation": station, "Type": "", "Equipment": ""})
-                    for etype, items in equip.items():
-                        for item in items:
-                            rows.append({"Region": region, "SubRegion/ACC": sub, "Substation": station, "Type": etype, "Equipment": item})
-        hier_df = pd.DataFrame(rows)
-        st.dataframe(hier_df, use_container_width=True, height=600)
-        total_equip = len([r for r in rows if r["Equipment"]])
-        total_stations = len(set((r["Region"], r["SubRegion/ACC"], r["Substation"]) for r in rows))
-        st.caption(f"{total_equip} equipment items across {total_stations} substations in {len(SUBSTATION_EQUIPMENT)} regions")
-
-
-def show_generate_report(df):
-    st.header("Generate Outage Report")
-
-    mode = st.radio("Report Period", ["Today", "Yesterday", "Custom Days", "Date Range"], horizontal=True)
-
-    today = date.today()
-    if mode == "Today":
-        start_date = today
-        end_date = today
-        st.info(f"Report for: **{today.strftime('%d %B %Y')}**")
-    elif mode == "Yesterday":
-        start_date = today - timedelta(days=1)
-        end_date = start_date
-        st.info(f"Report for: **{start_date.strftime('%d %B %Y')}**")
-    elif mode == "Custom Days":
-        num_days = st.number_input("Number of days (from today going back)", min_value=1, max_value=365, value=7)
-        start_date = today - timedelta(days=num_days - 1)
-        end_date = today
-        st.info(f"Report period: **{start_date.strftime('%d %B %Y')}** to **{end_date.strftime('%d %B %Y')}** ({num_days} days)")
-    else:
-        dr = st.date_input("Select Date Range", value=(today - timedelta(days=6), today))
-        if isinstance(dr, tuple) and len(dr) == 2:
-            start_date, end_date = dr
-        else:
-            start_date = end_date = today
-
-    rdf = df[df["Date_Off"].notna()].copy()
-    rdf = rdf[(rdf["Date_Off"].dt.date >= start_date) & (rdf["Date_Off"].dt.date <= end_date)]
-
-    st.divider()
-    if rdf.empty:
-        st.warning("No outage records found for the selected period.")
-        return
-
-    st.subheader(f"Report Summary ({len(rdf)} outages)")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Outages", f"{len(rdf):,}")
-    m2.metric("Total Duration (hrs)", f"{rdf['Duration_Hours'].sum():,.1f}")
-    m3.metric("Total Load Lost (MW)", f"{rdf['Last_Load_MW'].sum():,.1f}")
-    m4.metric("Substations Affected", f"{rdf['Substation'].nunique()}")
-
-    by_region = rdf.groupby("Region").agg(
-        Outages=("Region", "size"),
-        Duration_Hrs=("Duration_Hours", "sum"),
-        Load_Lost_MW=("Last_Load_MW", "sum"),
-        Substations=("Substation", "nunique"),
-    ).reset_index().sort_values("Outages", ascending=False)
-    by_region["Duration_Hrs"] = by_region["Duration_Hrs"].round(1)
-    by_region["Load_Lost_MW"] = by_region["Load_Lost_MW"].round(1)
-    st.dataframe(by_region, use_container_width=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        fig = px.bar(by_region, x="Region", y="Outages", color="Load_Lost_MW",
-                     title="Outages by Region",
-                     color_continuous_scale=TCN_RED_SCALE)
-        fig.update_layout(height=350, **TCN_CHART_LAYOUT)
-        fig.update_traces(marker_line_width=0)
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        by_class = rdf["Class"].value_counts().reset_index()
-        by_class.columns = ["Class", "Count"]
-        fig = px.pie(by_class, names="Class", values="Count", title="Outage Classification",
-                     hole=0.4, color_discrete_sequence=TCN_COLORS)
-        fig.update_layout(height=350, **TCN_CHART_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.divider()
-    st.subheader("Download Report")
-    report_name = f"TCN_Outage_Report_{start_date.strftime('%d-%m-%Y')}_to_{end_date.strftime('%d-%m-%Y')}"
-
-    dl1, dl2 = st.columns(2)
-
-    with dl1:
-        buf = io.BytesIO()
-        display = rdf.copy()
-        display_cols = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display.columns}
-        display = display.rename(columns=display_cols)
-
-        with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-            summary_data = pd.DataFrame([{
-                "Report Period": f"{start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}",
-                "Generated": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "Generated By": st.session_state.get("user_name", ""),
-                "Total Outages": len(rdf),
-                "Total Duration (hrs)": round(rdf["Duration_Hours"].sum(), 1),
-                "Total Load Lost (MW)": round(rdf["Last_Load_MW"].sum(), 1),
-                "Substations Affected": rdf["Substation"].nunique(),
-            }])
-            summary_data.T.reset_index().rename(columns={"index": "Metric", 0: "Value"}).to_excel(
-                writer, sheet_name="Report Info", index=False
-            )
-
-            show_cols = [c for c in DISPLAY_COLUMNS if c in display.columns]
-            display[show_cols].to_excel(writer, sheet_name="Outage Records", index=False)
-
-            by_region.to_excel(writer, sheet_name="By Region", index=False)
-
-            by_station = rdf.groupby(["Region", "Substation"]).agg(
-                Outages=("Substation", "size"),
-                Duration_Hrs=("Duration_Hours", "sum"),
-                Load_Lost_MW=("Last_Load_MW", "sum"),
-            ).reset_index().sort_values("Outages", ascending=False)
-            by_station["Duration_Hrs"] = by_station["Duration_Hrs"].round(1)
-            by_station["Load_Lost_MW"] = by_station["Load_Lost_MW"].round(1)
-            by_station.to_excel(writer, sheet_name="By Substation", index=False)
-
-            if rdf["Date_Off"].notna().any():
-                daily = rdf.groupby(rdf["Date_Off"].dt.date).agg(
-                    Outages=("Date_Off", "size"),
-                    Duration_Hrs=("Duration_Hours", "sum"),
-                    Load_Lost_MW=("Last_Load_MW", "sum"),
-                ).reset_index()
-                daily.columns = ["Date", "Outages", "Duration_Hrs", "Load_Lost_MW"]
-                daily.to_excel(writer, sheet_name="Daily Breakdown", index=False)
-
-            for ws_name in writer.sheets:
-                ws = writer.sheets[ws_name]
-                ws.set_column(0, 20, 18)
-
-        st.download_button(
-            "Download Excel Report",
-            buf.getvalue(),
-            f"{report_name}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-        )
-
-    with dl2:
-        display2 = rdf.copy()
-        display_cols2 = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display2.columns}
-        display2 = display2.rename(columns=display_cols2)
-        show_cols2 = [c for c in DISPLAY_COLUMNS if c in display2.columns]
-        csv = display2[show_cols2].to_csv(index=False)
-        st.download_button(
-            "Download CSV Report",
-            csv,
-            f"{report_name}.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-
-    st.divider()
-    st.subheader("Outage Records")
-    display3 = rdf.copy()
-    display_cols3 = {old: new for old, new in zip(COLUMNS, DISPLAY_COLUMNS) if old in display3.columns}
-    display3 = display3.rename(columns=display_cols3)
-    show_cols3 = [c for c in DISPLAY_COLUMNS if c in display3.columns]
-    st.dataframe(display3[show_cols3], use_container_width=True, height=400)
-
-
+# ──────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────
 def main():
-    if not st.session_state.get("authenticated"):
-        show_login()
+    inject_css()
+
+    if "user" not in st.session_state:
+        login_page()
         return
 
-    st.sidebar.markdown(f"**{st.session_state.get('user_name', '')}** ({st.session_state.get('username', '')})")
-    if st.sidebar.button("Logout"):
-        for key in ["authenticated", "username", "user_role", "user_name"]:
-            st.session_state.pop(key, None)
-        st.rerun()
-    st.sidebar.divider()
-
+    user = st.session_state.user
+    logo64 = _b64(LOGO)
+    logo_html = (
+        f'<div style="width:52px;height:52px;border-radius:13px;display:flex;align-items:center;'
+        f'justify-content:center;background:linear-gradient(135deg,#E8EEF7,#FBEAEA);'
+        f'border:1px solid rgba(55,53,47,0.08);">'
+        f'<img src="data:image/png;base64,{logo64}" width="36"></div>'
+        if logo64 else ""
+    )
     st.markdown(f"""
-    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
-        <img src="data:image/png;base64,{_logo_b64}" alt="TCN"
-             style="height: 44px; width: auto; flex-shrink: 0;
-                    filter: drop-shadow(0 1px 2px oklch(32% 0.06 250 / 0.08));" />
+    <div style="display:flex;align-items:center;gap:0.9rem;margin-bottom:0.4rem;">
+        {logo_html}
         <div>
-            <h1 style="margin: 0; color: oklch(32% 0.12 250); font-weight: 700; font-size: 1.5rem;
-                       letter-spacing: -0.02em; line-height: 1.2;
-                       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;">
-                TCN Outage Manager
-            </h1>
-            <p style="color: oklch(45% 0.006 250); font-size: 0.8rem; margin: 0.125rem 0 0;
-                      letter-spacing: 0.01em;">
-                Outage Tracking and Reporting
-            </p>
+            <div style="font-size:1.35rem;font-weight:700;color:var(--text-primary);">TCN Grid Outage Manager</div>
+            <div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-tertiary);">
+                330kV · 132kV Equipment Outages · Analytics · Reporting
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    df = load_all_data()
-
-    tab_names = [
-        "Dashboard", "Records", "Region Analysis", "Generate Report",
-        "Report Outage", "Network Hierarchy", "Export", "Upload Files",
-    ]
-    is_admin = st.session_state.get("user_role") == "admin"
-    if is_admin:
-        tab_names.append("Users")
-
-    tabs = st.tabs(tab_names)
-    tab_map = {name: tab for name, tab in zip(tab_names, tabs)}
-
-    if df.empty:
-        with tab_map["Report Outage"]:
-            show_outage_entry()
-        with tab_map["Network Hierarchy"]:
-            show_hierarchy_browser()
-        with tab_map["Upload Files"]:
-            show_upload()
-        if is_admin:
-            with tab_map["Users"]:
-                show_user_management()
-        with tab_map["Dashboard"]:
-            st.warning("No outage data found. Report an outage or upload TCN attribute files to get started.")
+    if not DATA_FILE.exists():
+        st.error(f"Data file not found: {DATA_FILE.name}. Upload it via the admin Upload tab or place it in the app folder.")
         return
 
-    filtered = apply_filters(df)
+    df = load_data()
+    if user.get("region"):
+        df = df[df["Region"] == user["region"]]
 
-    with tab_map["Dashboard"]:
-        show_dashboard(filtered)
-    with tab_map["Records"]:
-        show_data_table(filtered)
-    with tab_map["Region Analysis"]:
+    filtered = sidebar_filters(df, user)
+
+    tab_names = ["⚡ Dashboard", "🗂️ Records", "🌍 Region Analysis", "🔧 Equipment Analysis",
+                 "📝 Report Outage", "🗼 Network Hierarchy", "📤 Export"]
+    if user["role"] == "admin":
+        tab_names += ["📁 Upload Data", "👥 Users"]
+    tabs = st.tabs(tab_names)
+
+    with tabs[0]:
+        show_dashboard(filtered, user)
+    with tabs[1]:
+        show_records(filtered)
+    with tabs[2]:
         show_region_analysis(filtered)
-    with tab_map["Generate Report"]:
-        show_generate_report(filtered)
-    with tab_map["Report Outage"]:
-        show_outage_entry()
-    with tab_map["Network Hierarchy"]:
-        show_hierarchy_browser()
-    with tab_map["Export"]:
+    with tabs[3]:
+        show_equipment_analysis(filtered)
+    with tabs[4]:
+        show_report_outage(user)
+    with tabs[5]:
+        show_hierarchy(filtered)
+    with tabs[6]:
         show_export(filtered)
-    with tab_map["Upload Files"]:
-        show_upload()
-    if is_admin:
-        with tab_map["Users"]:
-            show_user_management()
+    if user["role"] == "admin":
+        with tabs[7]:
+            show_upload()
+        with tabs[8]:
+            show_users(user)
 
 
 if __name__ == "__main__":

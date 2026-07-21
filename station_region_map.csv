@@ -1,0 +1,229 @@
+Region,Sub-Region,Transmission Station,Sub-Station
+Abuja,Abuja Sub-region,Katampe 330/132kV T/S,katampe-1 132/33kV S/S
+Abuja,Abuja Sub-region,Katampe 330/132kV T/S,katampe-2 132/33kV S/S
+Abuja,Abuja Sub-region,Katampe 330/132kV T/S,Central Area 132/33kV S/S
+Abuja,Abuja Sub-region,Katampe 330/132kV T/S,Kubwa 132/33kV S/S
+Abuja,Abuja Sub-region,Katampe 330/132kV T/S,Gwarimpa GIS 132/33kV SS
+Abuja,Abuja Sub-region,Apo 132/33kV T/S,Keffi 132/33kV S/S
+Abuja,Abuja Sub-region,Apo 132/33kV T/S,Apo 132/33kV S/S
+Abuja,Abuja Sub-region,Apo 132/33kV T/S,Wumba 132/33kV S/S
+Abuja,Abuja Sub-region,Apo 132/33kV T/S,Karu 132/33kV S/S
+Abuja,Abuja Sub-region,Apo 132/33kV T/S,Akwanga 132/33kV S/S
+Abuja,Abuja Sub-region,Waru 330/132kV T/S,Waru 132/33kV S/S
+Abuja,Abuja Sub-region,Lafia 330/132kV T/S,Lafia 132/33kV S/S
+Abuja,Gwagwalada Sub-region,Gwagwalada 330/132kV T/S,Gwagwalada 132/33kV S/S
+Abuja,Gwagwalada Sub-region,Gwagwalada 330/132kV T/S,Kukwaba 132/33kV S/S
+Abuja,Gwagwalada Sub-region,Gwagwalada 330/132kV T/S,Suleja  132/33kV S/S
+Abuja,Gwagwalada Sub-region,Lugbe 330/132kV T/S,Lugbe 132/33kV S/S
+Abuja,Gwagwalada Sub-region,Lugbe 330/132kV T/S,Kuje 132/33kV S/S
+Abuja,Ajaokuta Sub-region,Ajaokuta 330kV T/S,Ajaokuta 132/33kV S/S
+Abuja,Ajaokuta Sub-region,Ajaokuta 330kV T/S,Okpella 132/33kV S/S
+Abuja,Ajaokuta Sub-region,Geregu 11 330kV T/S,Ayingba 132/33kV S/S
+Abuja,Ajaokuta Sub-region,Obajana 330/132kV T/S,Obajana 132/33kV S/S
+Abuja,Ajaokuta Sub-region,Lokoja 330kV T/S,Lokoja 132/33kV S/S
+Abuja,Ajaokuta Sub-region,Lokoja 330kV T/S,Okene 132/33kV S/S
+,,,
+Bauchi,Gombe Sub-Region,Gombe 330/132kV substation,Gombe 132/33kV substation
+Bauchi,Gombe Sub-Region,Gombe 330/132kV substation,Ashaka 132/33kV substation
+Bauchi,Gombe Sub-Region,Gombe 330/132kV substation,Potiskum 132/33kV substation
+Bauchi,Gombe Sub-Region,Gombe 330/132kV substation,Biu 132/33kV substation
+Bauchi,Jos Sub-Region,Jos 330/132kV substation,Jos 132/33kV substation
+Bauchi,Jos Sub-Region,Jos 330/132kV substation,Makeri 132/33kV substation
+Bauchi,Jos Sub-Region,Jos 330/132kV substation,Pankshin 132/33kV substation
+Bauchi,Jos Sub-Region,Jos 330/132kV substation,Kafanchan 132/33kV substation
+Bauchi,Jos Sub-Region,Jos 330/132kV substation,Bauchi 132/33kV substation
+Bauchi,Yola Works Centre,Yola 330/132kV substation,Yola 132/33kV substation
+Bauchi,Yola Works Centre,Yola 330/132kV substation,Savannah 132/33kV substation
+Bauchi,Yola Works Centre,Yola 330/132kV substation,Mayo Belwa 132/33kV substation
+Bauchi,Yola Works Centre,Yola 330/132kV substation,Jalingo 132/33kV substation
+Bauchi,Maiduguri Works Centre,Damaturu 330/132kV substation,Maiduguri 132/33kV substation
+Bauchi,Maiduguri Works Centre,Damaturu 330/132kV substation,Damboa 132/33kV substation
+Bauchi,Maiduguri Works Centre,Damaturu 330/132kV substation,Molai 132/33kV substation
+Bauchi,Maiduguri Works Centre,Damaturu 330/132kV substation,Damaturu 132/33kV substation
+,,,
+Benin,Benin South Sub-region,Benin 330/132KV T/S,Benin 132/33KV S/S
+Benin,Benin South Sub-region,Benin 330/132KV T/S,Irrua 132/33KV S/S
+Benin,Benin South Sub-region,Benin 330/132KV T/S,Oghara 132/33KV S/S
+Benin,Benin South Sub-region,Benin 330/132KV T/S,Etsako 132/33KV S/S
+Benin,Ihovbor Work Centre,Ihovbor 330/132kV TS Ihovbor NIPP 330/132kV TS Ihovbor Azura 330/132kV TS,Ihovbor 132/33kV S/S
+Benin,Ihovbor Work Centre,Ihovbor 330/132kV TS Ihovbor NIPP 330/132kV TS Ihovbor Azura 330/132kV TS,Okada 132/33kV S/S
+Benin,Sapele Work Centre,Sapele 330/132KV T/S,Amukpe 132/33kV S/S
+Benin,Sapele Work Centre,Sapele 330/132KV T/S,Effurun 132/33kV S/S
+Benin,Delta Sub-region,Delta 330/132KV T/S        Aladja Steel 330/132KV T/S,Delta 132/33KV S/S
+Benin,Delta Sub-region,Delta 330/132KV T/S        Aladja Steel 330/132KV T/S,Afisere 132/33kV S/S
+Benin,Delta Sub-region,Delta 330/132KV T/S        Aladja Steel 330/132KV T/S,Ozoro 132/33kV S/S
+Benin,Omotosho Sub-region,Omotosho phase 1  330/132/33KV T/S    Omotosho phase 2 330/132/33KV T/S,Omotosho 132/33kV S/S
+Benin,Omotosho Sub-region,Omotosho phase 1  330/132/33KV T/S    Omotosho phase 2 330/132/33KV T/S,Ondo 132/33kV S/S
+Benin,Omotosho Sub-region,Omotosho phase 1  330/132/33KV T/S    Omotosho phase 2 330/132/33KV T/S,Erinje 132/33kV S/S
+,,,
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,New Haven 132/33kV S/S
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,Nkalagu 132/33kV S/S
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,Abakaliki 132/33kV S/S
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,New Nsukka 132/33kV S/S
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,9th Mile 132/33kV S/S (completed without lines)
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,Amasiri 132/33kV S/S (completed without lines)
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,Umuoghara 330/132/33kV S/S (No transmission line)
+Enugu,Enugu Sub-region,Enugu 330/132kV T/S,"Nike Lake 132/33kV S/S
+(Awaiting Mobitra)"
+Enugu,Enugu Sub-region,Ugwuaji 330/132kV T/S,Ugwuaji 132/33kV S/S
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,Onitsha 132/33kV S/S
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,GCM 132/33kV S/S
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,Nibo Awka` 132/33kV S/S
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,Agu Awka132/33kV S/S
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,Oji River 132/66/33kV S/S
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,"Umuchu 132/33kV S/S
+(Under Construction)"
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,"Ihiala 330/132/33kV S/S
+(Under Construction)"
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,"Nnewi 132/33kV S/S
+(Under Construction)"
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,"Ojoto 132/33kV S/S
+(Under construction)"
+Enugu,Onitsha Sub-region,Onitsha 330/132kV T/S,"Aguleri 132/33kV S/S
+(only fence)"
+Enugu,Asaba Work centre,Asaba 330/132kV T/S,Asaba 132/33kV S/S
+Enugu,Asaba Work centre,Asaba 330/132kV T/S,Agbor 132/33kV S/S
+Enugu,Asaba Work centre,Asaba 330/132kV T/S,"Kwale 132/33KV S/S
+(Only fence)"
+Enugu,Asaba Work centre,Asaba 330/132kV T/S,"Nsukwa 132/33kV S/S
+(Only plot of land)"
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,Apir 132/33kV S/S
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,Yandev 132/33kV S/S
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,Otukpo 132/33kV S/S
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,Wukari 132/33kV S/S
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,Takum 132/33kV S/S
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,Kashimbila 132kV S/S
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,"Zakibiam 132/33kV S/S
+(Under Construction)"
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,"NorthBank 132/33kV S/S
+(Under Construction)"
+Enugu,Apir Sub-region,Makurdi 330/132kV T/S,"Ugba 132/33kV S/S
+(Under Construction)"
+,,,
+Kaduna,Kaduna Sub-region,Mando 330/132/33kV T/S,Mando 132/33kV S/S
+Kaduna,Kaduna Sub-region,Mando 330/132/33kV T/S,Kaduna Town 132/33kV S/S
+Kaduna,Kaduna Sub-region,Mando 330/132/33kV T/S,Zaria 132/33kV S/S
+Kaduna,Kaduna Sub-region,Jaja 330/132/33kV T/S (ongoing project),Kudendan 132/33kV S/S
+Kaduna,Kaduna Sub-region,Jaja 330/132/33kV T/S (ongoing project),Jaji 132/33kV S/S
+Kaduna,Kaduna Sub-region,Jaja 330/132/33kV T/S (ongoing project),Jaja 132/33kV S/S
+Kaduna,Gusau Works Centre,Jaja 330/132/33kV T/S (ongoing project),Funtua 132/33kV S/S
+Kaduna,Gusau Works Centre,Jaja 330/132/33kV T/S (ongoing project),Gusau 132/33kV S/S
+Kaduna,Gusau Works Centre,Jaja 330/132/33kV T/S (ongoing project),Talata-Mafara 132/33kV S/S
+Kaduna,Birnin Kebbi Sub-region (Proposed),Birnin Kebbi 330/132/33kV T/S,Birnin Kebbi 132kV S/S
+Kaduna,Birnin Kebbi Sub-region (Proposed),Birnin Kebbi 330/132/33kV T/S,Sokoto 132kV S/S
+,,,
+Kano,Kano Sub-region,Kumbotso 330/132kV T/S,Kumbotso 132/33kV S/S
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Dakata 132/33kV S/S
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Dan-Agundi 132/33kV S/S
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Kwana-Dangora 132/33kV S/S
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Wudil 132/33kV S/S
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Bichi 132/33kV
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Tambarawa 132/33kV S/S
+Kano,Kano Sub-region,Rimin Zakara 330/132kV,Walalambe 132/33kV S/S
+Kano,Katsina Sub-region,Rimin Zakara 330/132kV,Katsina 132/33kV S/S
+Kano,Katsina Sub-region,Rimin Zakara 330/132kV,Daura 132/33kV S/S
+Kano,Katsina Sub-region,Rimin Zakara 330/132kV,Kankia 132/33kV S/S
+Kano,Dutse Sub-region,Rimin Zakara 330/132kV,Dutse 132/33kV S/S
+Kano,Dutse Sub-region,Rimin Zakara 330/132kV,Hadejia 132/33kV S/S
+Kano,Dutse Sub-region,Rimin Zakara 330/132kV,Gagarawa 132/33kV S/S
+Kano,Dutse Sub-region,Rimin Zakara 330/132kV,Azare 132/33kV S/S
+,,,
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Akangba 132/33kV substation
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Ijora 132/33kV substation
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Ilupeju 132/33kV substation
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Isolo 132/33kV substation
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Itire 132/33kV substation
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Illashe 132/33kV substation
+Lagos,Akangba Sub-Region,Akangba 330/132kV substation,Ojo 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Ikeja West 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Ayobo 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Alimosho 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Ogba 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Alausa 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Ejigbo 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Ikeja-West 330/132kV substation,Agbara 132/33kV substation
+Lagos,Ikeja-West Sub-Region,Oke-Aro 330/132kV substation,Oke-Aro 132/33kV substation
+Lagos,Papalanto Sub-Region,Olorunsogo 330/132kV substation 1,Papalanto 132/33kV substation
+Lagos,Papalanto Sub-Region,Olorunsogo 330/132kV substation 1,Otta 132/33kV substation
+Lagos,Papalanto Sub-Region,Olorunsogo 330/132kV substation 2,Abeokuta 132/33kV substation
+Lagos,Papalanto Sub-Region,Olorunsogo 330/132kV substation 2,New Abeokuta 132/3kV Substaion
+Lagos,Egbin Sub-Region,Egbin 330/132kV substation,Egbin 132kV substation
+Lagos,Egbin Sub-Region,Egbin 330/132kV substation,Ikorodu 132/33kV substation
+Lagos,Egbin Sub-Region,Egbin 330/132kV substation,Odogunyan 132/33kV substation
+Lagos,Egbin Sub-Region,Egbin 330/132kV substation,Maryland 132/33kV substation
+Lagos,Aja Sub-Region,Aja 330/132kV substation,Aja 132/33kV substation
+Lagos,Aja Sub-Region,Lekki 330/132kV substation,Lekki 132/33kV substation
+Lagos,Aja Sub-Region,Alagbon 330/132kV substation,Alagbon 132/33kV substation
+Lagos,Aja Sub-Region,Alagbon 330/132kV substation,Akoka 132/33kV substation
+Lagos,Aja Sub-Region,Alagbon 330/132kV substation,Oworosoki 132/33kV substation
+Lagos,Aja Sub-Region,Alagbon 330/132kV substation,Amuwo-Odofin 132/33kV substation
+Lagos,Aja Sub-Region,Alagbon 330/132kV substation,Apapa Rd 132/33kV substation
+,,,
+Osogbo,Osogbo Sub-region,Osogbo 330/132/33KV T/S,Osogbo 132/33kV S/S
+Osogbo,Osogbo Sub-region,Osogbo 330/132/33KV T/S,Ofa  132/33kV S/S
+Osogbo,Osogbo Sub-region,Osogbo 330/132/33KV T/S,Ilesha 132/33kV S/S
+Osogbo,Osogbo Sub-region,Osogbo 330/132/33KV T/S,Ife 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Ayede 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Jericho 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Ibadan North 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Iwo 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Iseyin 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Ijebu-ode 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Sagamu 132/33kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Eleyele 132kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Sapade 132kv S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,UI 132kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Oyo 132kV S/S
+Osogbo,Ayede Sub-region,Ayede 330/132/33KV T/S,Mcpherson 132/33kV S/S
+Osogbo,Akure W/C,Ayede 330/132/33KV T/S,Ado-Ekiti 132/33kV S/S
+Osogbo,Akure W/C,Ayede 330/132/33KV T/S,Akure 132/33kV S/S
+Osogbo,Ganmo Sub-region,Ganmo 330/132/33KV T/S,Ganmo 132/33kV S/S
+Osogbo,Ganmo Sub-region,Ganmo 330/132/33KV T/S,Ilorin 132/33kV S/S
+Osogbo,Ganmo Sub-region,Ganmo 330/132/33KV T/S,Omuaran 132/33kV S/S
+,,,
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Port Harcourt Main 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Port Harcourt Town 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Elelenwon 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Rumuosi 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Yenagoa 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Gbarain 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Ahoada 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Omoku 132KV T/S
+Port Harcourt,Port Harcourt Sub-region,Onne 330KV T/S,Oproma 132KV T/S
+Port Harcourt,Afam Sub-region,Afam IV 330KV T/S,Afam I-III
+Port Harcourt,Afam Sub-region,Afam V 330KV T/S,Afam IPP
+Port Harcourt,Aba Sub-region,Alaoji NIPP 330KV T/S,Alaoji 132KV T/S
+Port Harcourt,Aba Sub-region,Alaoji 330KV T/S,Aba 132KV T/S
+Port Harcourt,Aba Sub-region,Alaoji 330KV T/S,Umuahia 132KV T/S
+Port Harcourt,Aba Sub-region,Alaoji 330KV T/S,Mbalano 132KV T/S
+Port Harcourt,Aba Sub-region,Alaoji 330KV T/S,Ohufa 132KV T/S
+Port Harcourt,Aba Sub-region,Alaoji 330KV T/S,Arochukwu 132KV T/S
+Port Harcourt,Owerri  WC,Owerri 330KV T/S,Owerri 132KV T/S
+Port Harcourt,Owerri  WC,Owerri 330KV T/S,FUTO 132KV T/S
+Port Harcourt,Owerri  WC,Egbema 330KV T/S,Orlu 132KV T/S
+Port Harcourt,Owerri  WC,Egbema 330KV T/S,Okigwe 132KV T/S
+Port Harcourt,Owerri  WC,Egbema 330KV T/S,Mbaise 132KV T/S
+Port Harcourt,Owerri  WC,Egbema 330KV T/S,Egbema 132KV T/S
+Port Harcourt,Calabar Sub-region,Adiabor 330KV T/S,Calabar 132KV T/S
+Port Harcourt,Calabar Sub-region,Odukpani 330KV T/S,Adiabo 132KV T/S
+Port Harcourt,Calabar Sub-region,Odukpani 330KV T/S,Odukpani 132KV T/S
+Port Harcourt,Uyo WC,Ikot Ekpene 330KV S/S,Itu 132KV T/S
+Port Harcourt,Uyo WC,Ikot Abasi 330KV T/S,Uyo 132KV T/S
+Port Harcourt,Uyo WC,Ikot Abasi 330KV T/S,Eket 132KV T/S
+Port Harcourt,Uyo WC,Ikot Abasi 330KV T/S,Ekim  132KV T/S
+Port Harcourt,Uyo WC,Ikot Abasi 330KV T/S,Ibom PS 132/33KV T/S
+Port Harcourt,Uyo WC,Ikot Abasi 330KV T/S,Ikot Ekpene 132KV T/S
+,,,
+Shiroro,Shiroro Sub-region,Shiroro 330/132/33KV T/S,Shiroro 132/33kV S/S
+Shiroro,Shiroro Sub-region,Shiroro 330/132/33KV T/S,Shiroro II 132/33kV S/S
+Shiroro,Shiroro Sub-region,Shiroro 330/132/33KV T/S,Minna 132/33kV S/S
+Shiroro,Shiroro Sub-region,Mararaba 330kV Switching Station,Mararaba 132/33kV S/S
+Shiroro,Shiroro Sub-region,Zungeru 330/33kV T/S,Zungeru 132/33kV S/S
+Shiroro,Jebba Sub-region,Jebba 330/132/33KV T/S,Jebba 132/33kV S/S
+Shiroro,Jebba Sub-region,Jebba 330/132/33KV T/S,Bida 132/33kV S/S
+Shiroro,Jebba Sub-region,Jebba 330/132/33KV T/S,Jebba 132/33kV Mobile S/S
+Shiroro,Kontagora W/C,Jebba 330/132/33KV T/S,Kontagora 132/33kV S/S
+Shiroro,Kontagora W/C,Jebba 330/132/33KV T/S,Yauri132/33kV S/S
+Shiroro,Kontagora W/C,Jebba 330/132/33KV T/S,Tegina 132/33kV S/S
+Shiroro,Kainji W/C,Kainji 330KV T/S,Fakum 330kV S/S
+Shiroro,Kainji W/C,Kainji 330KV T/S,Dogongeri 132/33kV S/S

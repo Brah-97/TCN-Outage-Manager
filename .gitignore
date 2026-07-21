@@ -30,6 +30,9 @@ skills-lock.json
 # Design artifacts
 tcn_design_philosophy.md
 
+# Local editor/agent settings
+.claude/
+
 # Misc
 *.log
 .DS_Store
