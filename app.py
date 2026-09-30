@@ -20,6 +20,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+import db
+
 # ──────────────────────────────────────────────────────────────
 # Paths & constants
 # ──────────────────────────────────────────────────────────────
@@ -351,16 +353,40 @@ def inject_css():
 # ──────────────────────────────────────────────────────────────
 # Auth
 # ──────────────────────────────────────────────────────────────
+def _bootstrap_admin():
+    return {"password": _hash("admin123"), "role": "admin",
+            "name": "Administrator", "region": None}
+
+
 def load_users():
+    if db.enabled():
+        users = db.read_users()
+        if not users:
+            db.upsert_user("admin", _bootstrap_admin())
+            users = db.read_users()
+        return users
     if USERS_FILE.exists():
         return json.loads(USERS_FILE.read_text())
-    users = {"admin": {"password": _hash("admin123"), "role": "admin",
-                       "name": "Administrator", "region": None}}
+    users = {"admin": _bootstrap_admin()}
     USERS_FILE.write_text(json.dumps(users, indent=2))
     return users
 
 
-def save_users(users):
+def create_user(username, record):
+    if db.enabled():
+        db.upsert_user(username, record)
+        return
+    users = load_users()
+    users[username] = record
+    USERS_FILE.write_text(json.dumps(users, indent=2))
+
+
+def remove_user(username):
+    if db.enabled():
+        db.delete_user(username)
+        return
+    users = load_users()
+    users.pop(username, None)
     USERS_FILE.write_text(json.dumps(users, indent=2))
 
 
@@ -562,11 +588,21 @@ def _st_key(name):
     return " ".join(t for t in s.split() if t not in _ST_STOP).strip()
 
 
-@st.cache_data
-def _station_lookup():
+def read_station_map():
+    if db.enabled():
+        m = db.read_station_map()
+        return m if not m.empty else None
     if not STATION_MAP_FILE.exists():
         return None
-    m = pd.read_csv(STATION_MAP_FILE).dropna(how="all")
+    return pd.read_csv(STATION_MAP_FILE)
+
+
+@st.cache_data(ttl=600)
+def _station_lookup():
+    m = read_station_map()
+    if m is None:
+        return None
+    m = m.dropna(how="all")
     m = m[m["Region"].notna()]
     ts_map, ss_map, ts_first, ss_first = {}, {}, {}, {}
     station_subregion, sr_canon = {}, {}
@@ -711,10 +747,39 @@ def _equip_type(e):
     return "Grid Event"
 
 
-@st.cache_data(show_spinner="Loading outage data…")
-def load_data():
+def read_outages_raw():
+    """Raw outage rows (workbook column names) from Supabase or the local workbook."""
+    if db.enabled():
+        return db.read_outages()
     df = pd.read_excel(DATA_FILE, sheet_name=0)
     df.columns = [c.strip() for c in df.columns]
+    return df
+
+
+def append_outages(new):
+    if db.enabled():
+        db.append_outages(new)
+        return
+    existing = pd.read_excel(DATA_FILE, sheet_name=0)
+    combined = pd.concat([existing, new], ignore_index=True)
+    with pd.ExcelWriter(DATA_FILE, engine="openpyxl") as writer:
+        combined.to_excel(writer, sheet_name="Outages", index=False)
+
+
+def replace_outages(new):
+    if db.enabled():
+        db.replace_outages(new)
+        return
+    with pd.ExcelWriter(DATA_FILE, engine="openpyxl") as writer:
+        new.to_excel(writer, sheet_name="Outages", index=False)
+
+
+# Short TTL so reports logged by other operators show up without a restart
+@st.cache_data(ttl=60, show_spinner="Loading outage data…")
+def load_data():
+    df = read_outages_raw()
+    if df.empty:
+        return df
 
     df["Duration_Hours"] = df["Duration"].map(_parse_duration)
     df["Datetime_Off"] = (
@@ -769,13 +834,12 @@ def _clean_cell(s):
     return s or None
 
 
-@st.cache_data(show_spinner="Loading equipment catalog…")
-def load_catalog():
-    """Canonical equipment register from the 330kV and 132kV reference workbooks.
+def parse_catalog_files():
+    """Raw equipment register parsed from the 330kV and 132kV reference workbooks.
 
     Includes region, sub-region, station, line names/nomenclature and
     transformer names/nomenclature. 33kV feeder names and peak load are
-    intentionally excluded.
+    intentionally excluded. Station names are NOT canonicalised here.
     """
     rows = []
 
@@ -854,8 +918,16 @@ def load_catalog():
                     name = f"{name} ({nom})"
                 rows.append((region, _clean_cell(r.get("Sub-Region")), station, "Transformer", "132kV", name))
 
-    cat = pd.DataFrame(rows, columns=["Region", "SubRegion", "Substation",
-                                      "Equipment_Type", "Voltage_Level", "Equipment"])
+    return pd.DataFrame(rows, columns=["Region", "SubRegion", "Substation",
+                                       "Equipment_Type", "Voltage_Level", "Equipment"])
+
+
+@st.cache_data(ttl=600, show_spinner="Loading equipment catalog…")
+def load_catalog():
+    """Canonical equipment register (Supabase table, or the reference workbooks)."""
+    cat = db.read_catalog() if db.enabled() else parse_catalog_files()
+    if cat.empty:
+        return cat
 
     # Canonical station & sub-region names (station_region_map.csv) so the two
     # reference workbooks resolve to the SAME station entry — e.g. "AJAOKUTA TS
@@ -879,10 +951,18 @@ def load_catalog():
     return cat.drop_duplicates(subset=["Substation", "Equipment"]).reset_index(drop=True)
 
 
-@st.cache_data
+def read_hierarchy_raw():
+    if db.enabled():
+        return db.read_hierarchy()
+    return pd.read_excel(HIERARCHY_FILE, sheet_name="Sheet1")
+
+
+@st.cache_data(ttl=600)
 def load_hierarchy():
     try:
-        h = pd.read_excel(HIERARCHY_FILE, sheet_name="Sheet1")
+        h = read_hierarchy_raw()
+        if h.empty:
+            return pd.DataFrame()
         h.columns = [c.strip() for c in h.columns]
         for c in h.columns:
             if h[c].dtype == object:
@@ -904,6 +984,13 @@ def sidebar_filters(df, user):
             f"**{user['name']}** ({user['username']})<br>"
             f'<span style="font-size:0.72rem;background:rgba(255,255,255,0.14);padding:2px 8px;'
             f'border-radius:5px;font-family:monospace;">{role_badge}</span> · {scope}',
+            unsafe_allow_html=True,
+        )
+        source, dot = ("Supabase", "#3ECF8E") if db.enabled() else ("Local files", "#E0A33A")
+        st.markdown(
+            f'<div style="font-size:0.68rem;color:#9FB0D6;margin:4px 0 8px 0;">'
+            f'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;'
+            f'background:{dot};margin-right:6px;"></span>Data source: {source}</div>',
             unsafe_allow_html=True,
         )
         if st.button("Logout", type="primary"):
@@ -1694,10 +1781,7 @@ def show_report_outage(user):
                 "Remarks": remarks.strip() or None,
             }
             try:
-                existing = pd.read_excel(DATA_FILE, sheet_name=0)
-                combined = pd.concat([existing, pd.DataFrame([row])], ignore_index=True)
-                with pd.ExcelWriter(DATA_FILE, engine="openpyxl") as writer:
-                    combined.to_excel(writer, sheet_name="Outages", index=False)
+                append_outages(pd.DataFrame([row]))
                 load_data.clear()
                 st.success(f"Outage recorded for {row['Equipment']} at {row['Substation']} ({region}).")
             except PermissionError:
@@ -1795,12 +1879,9 @@ def show_upload():
             mode = st.radio("Import mode", ["Replace existing data", "Append to existing data"], horizontal=True)
             if st.button("Confirm Import", type="primary"):
                 if mode.startswith("Append"):
-                    existing = pd.read_excel(DATA_FILE, sheet_name=0)
-                    combined = pd.concat([existing, new], ignore_index=True)
+                    append_outages(new)
                 else:
-                    combined = new
-                with pd.ExcelWriter(DATA_FILE, engine="openpyxl") as writer:
-                    combined.to_excel(writer, sheet_name="Outages", index=False)
+                    replace_outages(new)
                 load_data.clear()
                 st.success(f"Imported {len(new):,} rows ({mode.split()[0].lower()}). Data reloaded.")
                 st.rerun()
@@ -1830,14 +1911,13 @@ def show_users(user):
         if st.form_submit_button("Create User", type="primary"):
             if not uname or not pw:
                 st.error("Username and password are required.")
-            elif uname in users:
+            elif uname.strip() in users:
                 st.error("Username already exists.")
             else:
-                users[uname.strip()] = {
+                create_user(uname.strip(), {
                     "password": _hash(pw), "role": role, "name": name or uname,
                     "region": None if region == "All" or role == "admin" else region,
-                }
-                save_users(users)
+                })
                 st.success(f"User '{uname}' created.")
                 st.rerun()
 
@@ -1846,8 +1926,7 @@ def show_users(user):
     if deletable:
         target = st.selectbox("Select user", deletable)
         if st.button("Delete User"):
-            users.pop(target, None)
-            save_users(users)
+            remove_user(target)
             st.success(f"User '{target}' deleted.")
             st.rerun()
 
@@ -1883,11 +1962,27 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    if not DATA_FILE.exists():
+    if not db.enabled() and not DATA_FILE.exists():
         st.error(f"Data file not found: {DATA_FILE.name}. Upload it via the admin Upload tab or place it in the app folder.")
         return
 
-    df = load_data()
+    try:
+        df = load_data()
+    except Exception as exc:
+        source = "Supabase" if db.enabled() else DATA_FILE.name
+        st.error(f"Could not load outage data from {source}: {exc}")
+        return
+
+    if df.empty:
+        st.info("The outage database is empty. Run `python migrate_to_supabase.py` to import "
+                "the existing records, or upload a compiled workbook below.")
+        if user["role"] == "admin":
+            up_tab, users_tab = st.tabs(["📁 Upload Data", "👥 Users"])
+            with up_tab:
+                show_upload()
+            with users_tab:
+                show_users(user)
+        return
     if user.get("region"):
         df = df[df["Region"] == user["region"]]
 

@@ -14,8 +14,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Auth
+# Auth & secrets
 users.json
+.streamlit/secrets.toml
+.env
 
 # Uploads
 uploads/
