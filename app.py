@@ -19,6 +19,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 import db
 
@@ -66,7 +67,11 @@ TCN_CHART_LAYOUT = dict(
     ),
 )
 
-st.set_page_config(page_title="TCN Grid Outage Manager", page_icon="⚡", layout="wide")
+st.set_page_config(
+    page_title="TCN Grid Outage Manager",
+    page_icon=str(LOGO) if LOGO.exists() else ":material/bolt:",
+    layout="wide",
+)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -89,6 +94,66 @@ def _style_chart(fig):
     return fig
 
 
+def _monthly_trend_figure(monthly):
+    """Outages and load lost per month as two stacked panels on one shared month axis.
+
+    Two measures with different units get their own scale instead of a dual-axis
+    overlay, so neither series is distorted by the other.
+    """
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.16)
+    panels = [
+        (1, monthly["Outages"], TCN_BLUE, "Outages", "{:,.0f}", ""),
+        (2, monthly["Load"], TCN_RED, "Load lost", "{:,.0f}", " MW"),
+    ]
+    # Both measures in every tooltip, whichever panel is hovered
+    both = list(zip(monthly["Outages"], monthly["Load"]))
+    tip = ("<b>%{x}</b><br>Outages: %{customdata[0]:,.0f}"
+           "<br>Load lost: %{customdata[1]:,.0f} MW<extra></extra>")
+    for row, values, color, label, fmt, unit in panels:
+        fig.add_trace(go.Bar(
+            x=monthly["Label"], y=values, name=label, customdata=both,
+            marker=dict(color=color, line_width=0, cornerradius=4),
+            hovertemplate=tip,
+        ), row=row, col=1)
+
+        # Label the peak month only (selective direct label)
+        if values.max() > 0:
+            i = int(values.values.argmax())
+            fig.add_annotation(
+                x=monthly["Label"].iloc[i], y=values.iloc[i], row=row, col=1,
+                text=f"<b>{fmt.format(values.iloc[i])}{unit}</b>",
+                showarrow=False, yshift=11, font=dict(size=11, color="#37352F"),
+            )
+
+        # Panel label, top-left of each panel, in text ink (not series colour)
+        top = fig.layout["yaxis" if row == 1 else "yaxis2"].domain[1]
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0, y=top + 0.015,
+            xanchor="left", yanchor="bottom", showarrow=False,
+            text=(f"<span style='color:{color}'>■</span> "
+                  f"<b>{label}</b>{' (MW)' if unit else ' (count)'}"),
+            font=dict(size=11.5, color="#5F5E5A"),
+        )
+        fig.update_yaxes(
+            row=row, col=1, nticks=4, tickformat="~s", rangemode="tozero",
+            tickfont=dict(size=10, color="#8A8984"),
+            gridcolor="rgba(55,53,47,0.07)", zeroline=False,
+            range=[0, values.max() * 1.22 if values.max() > 0 else 1],
+        )
+
+    fig.update_xaxes(showgrid=False, zeroline=False, showline=True,
+                     linecolor="rgba(55,53,47,0.18)", tickfont=dict(size=10.5, color="#6F6E69"))
+    fig.update_xaxes(showticklabels=False, showline=False, row=1, col=1)
+    fig.update_layout(
+        # Few months → slimmer bars so a 3-month view doesn't look like blocks
+        **{**TCN_CHART_LAYOUT, "bargap": 0.62 if len(monthly) <= 4 else 0.4,
+           "margin": dict(l=8, r=8, t=56, b=8)},
+        title=dict(text="Monthly Outages & Load Lost", x=0, xanchor="left"),
+        height=380, showlegend=False, hovermode="closest",
+    )
+    return fig
+
+
 def _eyebrow(text, bg="#E8EEF7", fg=TCN_BLUE):
     st.markdown(
         f'<span style="display:inline-block;font-size:0.68rem;font-weight:700;'
@@ -107,7 +172,20 @@ ICONS = {
     "alert": '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
     "tower": '<path d="M12 2v20"/><path d="M6 22l6-14 6 14"/><path d="M8 12h8"/>',
     "chart": '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+    "calendar": '<rect x="3" y="4.5" width="18" height="17" rx="2.5"/><line x1="16" y1="2.5" x2="16" y2="6.5"/>'
+                '<line x1="8" y1="2.5" x2="8" y2="6.5"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    "globe": '<circle cx="12" cy="12" r="9.5"/><line x1="2.5" y1="12" x2="21.5" y2="12"/>'
+             '<path d="M12 2.5a14.5 14.5 0 0 1 3.8 9.5 14.5 14.5 0 0 1-3.8 9.5 14.5 14.5 0 0 1-3.8-9.5 14.5 14.5 0 0 1 3.8-9.5z"/>',
+    "wrench": '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94'
+              'l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
 }
+
+
+def _flt_label(icon, text, color="#9FB0D6"):
+    """Sidebar filter label: small line icon in the filter's accent colour + caps text."""
+    return (f'<div class="flt-label"><svg viewBox="0 0 24 24" fill="none" stroke="{color}" '
+            f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{ICONS[icon]}</svg>'
+            f'<span>{text}</span></div>')
 
 
 def kpi_card(label, value, unit="", icon="bolt", color=TCN_BLUE):
@@ -187,6 +265,7 @@ def inject_css():
 
     /* Filter widget labels */
     [data-testid="stSidebar"] .stMultiSelect label p,
+    [data-testid="stSidebar"] .stSelectbox label p,
     [data-testid="stSidebar"] .stDateInput label p {{
         font-size: 0.7rem !important; font-weight: 700 !important;
         text-transform: uppercase; letter-spacing: 0.09em;
@@ -195,6 +274,7 @@ def inject_css():
 
     /* Glassy inputs */
     [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div,
+    [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
     [data-testid="stSidebar"] .stDateInput [data-baseweb="input"] {{
         background: rgba(255,255,255,0.07) !important;
         border: 1px solid rgba(255,255,255,0.16) !important;
@@ -203,10 +283,93 @@ def inject_css():
     }}
     [data-testid="stSidebar"] .stDateInput input {{ background: transparent !important; }}
     [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div:hover,
+    [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div:hover,
     [data-testid="stSidebar"] .stDateInput [data-baseweb="input"]:hover {{
         border-color: rgba(255,255,255,0.38) !important;
         background: rgba(255,255,255,0.11) !important;
         box-shadow: 0 0 0 3px rgba(255,255,255,0.05);
+    }}
+
+    /* Multi-select filter dropdowns (popover + checklist) */
+    .flt-label {{
+        display: flex; align-items: center; gap: 7px;
+        font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.09em; color: #9FB0D6 !important;
+        margin: 0.55rem 0 0.35rem 0;
+    }}
+    .flt-label svg {{ width: 14px; height: 14px; flex-shrink: 0; }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stPopover"] button {{
+        width: 100%; min-height: 44px;
+        justify-content: space-between;
+        background: rgba(255,255,255,0.07) !important;
+        border: 1px solid rgba(255,255,255,0.16) !important;
+        border-radius: 12px !important;
+        transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+    }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stPopover"] button:hover {{
+        border-color: rgba(255,255,255,0.38) !important;
+        background: rgba(255,255,255,0.11) !important;
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.05);
+    }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stPopover"] button p {{
+        font-weight: 600 !important; font-size: 0.88rem !important;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stPopover"] button > div {{
+        width: 100%; justify-content: space-between; min-width: 0;
+    }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stPopover"] button > div > div:first-child,
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stPopover"] button > div > div:first-child > span {{
+        flex: 1 1 auto; min-width: 0; justify-content: flex-start; text-align: left;
+    }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stMarkdownContainer"] {{
+        min-width: 0; overflow: hidden;
+    }}
+    [data-testid="stSidebar"] [class*="st-key-flt_"] [data-testid="stIconMaterial"] {{
+        color: #9FB0D6 !important;
+    }}
+    [data-testid="stSidebar"] .st-key-flt_region [data-testid="stPopover"] button {{
+        border-left: 3px solid #4f74c8 !important;
+    }}
+    [data-testid="stSidebar"] .st-key-flt_voltage [data-testid="stPopover"] button {{
+        border-left: 3px solid #e0525b !important;
+    }}
+    [data-testid="stSidebar"] .st-key-flt_class [data-testid="stPopover"] button {{
+        border-left: 3px solid #d39a2a !important;
+    }}
+    [data-testid="stSidebar"] .st-key-flt_etype [data-testid="stPopover"] button {{
+        border-left: 3px solid #5a9e62 !important;
+    }}
+
+    /* Checklist panel */
+    [data-testid="stPopoverBody"] {{
+        border-radius: 14px !important;
+        box-shadow: 0 14px 36px rgba(14,28,61,0.30) !important;
+        padding: 0.8rem 0.9rem !important;
+        min-width: 240px;
+    }}
+    [data-testid="stPopoverBody"] .stCheckbox {{
+        padding: 2px 6px; border-radius: 8px;
+        transition: background 0.15s ease;
+    }}
+    [data-testid="stPopoverBody"] .stCheckbox:hover {{ background: #F1F4FA; }}
+    [data-testid="stPopoverBody"] .stCheckbox p {{ font-size: 0.88rem; font-weight: 500; }}
+    [data-testid="stPopoverBody"] .stButton button {{
+        border-radius: 9px; font-size: 0.78rem; font-weight: 600;
+        padding: 0.25rem 0.5rem; min-height: 32px;
+    }}
+
+    /* Dropdown menu (rendered outside the sidebar) */
+    div[data-baseweb="popover"] ul[role="listbox"] {{
+        border-radius: 12px !important;
+        padding: 4px !important;
+        box-shadow: 0 12px 32px rgba(14,28,61,0.28) !important;
+    }}
+    div[data-baseweb="popover"] li[role="option"] {{
+        border-radius: 8px; font-size: 0.86rem;
+    }}
+    div[data-baseweb="popover"] li[role="option"][aria-selected="true"] {{
+        background: #E8EEF7 !important; color: {TCN_BLUE} !important; font-weight: 700;
     }}
 
     /* Tag pills — color-coded per filter */
@@ -217,18 +380,6 @@ def inject_css():
         transition: transform 0.2s var(--ease-spring);
     }}
     [data-testid="stSidebar"] span[data-baseweb="tag"]:hover {{ transform: translateY(-1px); }}
-    .st-key-flt_region span[data-baseweb="tag"] {{
-        background: linear-gradient(135deg, #2a4a94, {TCN_BLUE}) !important;
-    }}
-    .st-key-flt_voltage span[data-baseweb="tag"] {{
-        background: linear-gradient(135deg, #d43a44, #9c1620) !important;
-    }}
-    .st-key-flt_class span[data-baseweb="tag"] {{
-        background: linear-gradient(135deg, #b07a10, #7d5606) !important;
-    }}
-    .st-key-flt_etype span[data-baseweb="tag"] {{
-        background: linear-gradient(135deg, #3f7a45, #2a5230) !important;
-    }}
 
     /* Record count badge */
     .flt-count {{
@@ -1014,25 +1165,61 @@ def sidebar_filters(df, user):
 
         dmin = df["Datetime_Off"].min()
         dmax = df["Datetime_Off"].max()
+        st.markdown(_flt_label("calendar", "Date Range"), unsafe_allow_html=True)
         date_range = st.date_input(
-            "📅 Date Range",
+            "Date Range", label_visibility="collapsed",
             value=(dmin.date(), dmax.date()) if pd.notna(dmin) else (),
             key="flt_date",
         )
 
-        regions_all = sorted(df["Region"].dropna().unique())
-        if user["region"]:
-            regions = [user["region"]]
-            st.multiselect("🌍 Region", regions_all, default=regions, disabled=True, key="flt_region")
-        else:
-            regions = st.multiselect("🌍 Region", regions_all, default=regions_all, key="flt_region")
+        def _set_all(keys, value):
+            for k in keys:
+                st.session_state[k] = value
 
-        voltages = st.multiselect("⚡ Voltage Level", ["330kV", "132kV", "Other"],
-                                  default=["330kV", "132kV", "Other"], key="flt_voltage")
-        classes = st.multiselect("🚨 Outage Class", sorted(df["Class"].unique()),
-                                 default=sorted(df["Class"].unique()), key="flt_class")
-        etypes = st.multiselect("🔧 Equipment Type", sorted(df["Equipment_Type"].unique()),
-                                default=sorted(df["Equipment_Type"].unique()), key="flt_etype")
+        def _multi_dropdown(label_html, all_label, options, key):
+            """Dropdown button holding a checklist; returns the ticked options."""
+            opt_keys = [f"{key}__{o}" for o in options]
+            for k in opt_keys:
+                st.session_state.setdefault(k, True)
+            ticked = [o for o, k in zip(options, opt_keys) if st.session_state[k]]
+
+            if len(ticked) == len(options):
+                summary = all_label
+            elif not ticked:
+                summary = "None selected"
+            elif len(ticked) <= 2:
+                summary = ", ".join(ticked)
+            else:
+                summary = f"{', '.join(ticked[:2])} +{len(ticked) - 2} more"
+
+            st.markdown(label_html, unsafe_allow_html=True)
+            with st.container(key=key):
+                with st.popover(summary, use_container_width=True):
+                    b1, b2 = st.columns(2)
+                    b1.button("Select all", key=f"{key}__all", use_container_width=True,
+                              on_click=_set_all, args=(opt_keys, True))
+                    b2.button("Clear", key=f"{key}__none", use_container_width=True,
+                              on_click=_set_all, args=(opt_keys, False))
+                    for o, k in zip(options, opt_keys):
+                        st.checkbox(o, key=k)
+            return ticked
+
+        regions_all = sorted(df["Region"].dropna().unique())
+        region_label = _flt_label("globe", "Region", "#7FA0E0")
+        if user["region"]:
+            st.markdown(region_label, unsafe_allow_html=True)
+            with st.container(key="flt_region"):
+                st.popover(user["region"], disabled=True, use_container_width=True)
+            regions = [user["region"]]
+        else:
+            regions = _multi_dropdown(region_label, "All Regions", regions_all, "flt_region")
+
+        voltages = _multi_dropdown(_flt_label("bolt", "Voltage Level", "#F07A82"), "All Voltage Levels",
+                                   ["330kV", "132kV", "Other"], "flt_voltage")
+        classes = _multi_dropdown(_flt_label("alert", "Outage Class", "#E5B04A"), "All Classes",
+                                  sorted(df["Class"].unique()), "flt_class")
+        etypes = _multi_dropdown(_flt_label("wrench", "Equipment Type", "#74B67C"), "All Equipment Types",
+                                 sorted(df["Equipment_Type"].unique()), "flt_etype")
 
     filtered = df[
         df["Region"].isin(regions)
@@ -1117,27 +1304,20 @@ def show_dashboard(df, user):
             Outages=("Outages", "sum"), Load=("Load", "sum"),
         ).reset_index()
         monthly["Label"] = monthly["Day"].dt.strftime("%b '%y")
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=monthly["Label"], y=monthly["Outages"], name="Outages",
-            marker_color=TCN_BLUE, marker_line_width=0, marker_cornerradius=4, opacity=0.85,
-        ))
-        fig.add_trace(go.Scatter(
-            x=monthly["Label"], y=monthly["Load"], name="Load Lost (MW)", yaxis="y2",
-            mode="lines+markers",
-            line=dict(color=TCN_RED, width=2.5, shape="spline"),
-            marker=dict(size=6, color=TCN_RED, line=dict(width=1.5, color="white")),
-        ))
-        fig.update_layout(
-            title="Monthly Outages & Load Lost",
-            yaxis=dict(title="Outages"),
-            yaxis2=dict(title="MW", overlaying="y", side="right", showgrid=False),
-            xaxis=dict(tickangle=-45),
-            legend=dict(x=0, y=1.14, orientation="h", font=dict(size=11), bgcolor="rgba(0,0,0,0)"),
-            height=380, **{**TCN_CHART_LAYOUT, "bargap": 0.35},
-        )
-        _style_chart(fig)
-        st.plotly_chart(fig, use_container_width=True)
+
+        # Long-running outages that began well before the reporting period would
+        # otherwise stretch the axis across months of empty bars. Start the chart
+        # where activity begins (leading months holding <1% of outages), and say so.
+        total = monthly["Outages"].sum()
+        lead = monthly["Outages"].cumsum() < 0.01 * total
+        hidden = monthly[lead]
+        shown = monthly[~lead] if lead.any() and (~lead).sum() >= 2 else monthly
+        st.plotly_chart(_monthly_trend_figure(shown), use_container_width=True)
+        if len(shown) < len(monthly) and hidden["Outages"].sum() > 0:
+            n = int(hidden["Outages"].sum())
+            span = f"{hidden['Label'].iloc[0]} – {hidden['Label'].iloc[-1]}"
+            st.caption(f"+{n} long-running outage{'s' if n != 1 else ''} starting {span} "
+                       "not shown on this chart (still included in all totals).")
 
     # Row 2: class pie + equipment type + party responsible
     c3, c4, c5 = st.columns(3)
@@ -1368,16 +1548,17 @@ def show_region_analysis(df):
     g1, g2, _ = st.columns([1, 1, 2])
     with g1:
         st.download_button(
-            "⚡ Generate Excel Report", buf.getvalue(),
-            f"TCN_Region_Analysis_{region.replace(' ', '_')}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary", use_container_width=True, key="ra_gen_xlsx",
+            "Generate Excel Report", data=buf.getvalue(),
+            file_name=f"TCN_Region_Analysis_{region.replace(' ', '_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            icon=":material/table_view:", type="primary",
+            use_container_width=True, key="ra_gen_xlsx",
         )
     with g2:
         st.download_button(
-            "📄 Download CSV", rdf[rep_cols].to_csv(index=False).encode(),
-            f"TCN_Region_Analysis_{region.replace(' ', '_')}.csv", "text/csv",
-            use_container_width=True, key="ra_gen_csv",
+            "Download CSV", data=rdf[rep_cols].to_csv(index=False).encode(),
+            file_name=f"TCN_Region_Analysis_{region.replace(' ', '_')}.csv", mime="text/csv",
+            icon=":material/description:", use_container_width=True, key="ra_gen_csv",
         )
 
 
@@ -1578,16 +1759,17 @@ def show_equipment_analysis(df):
     g1, g2, _ = st.columns([1, 1, 2])
     with g1:
         st.download_button(
-            "⚡ Generate Excel Report", buf.getvalue(),
-            "TCN_Equipment_Analysis.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary", use_container_width=True, key="ea_gen_xlsx",
+            "Generate Excel Report", data=buf.getvalue(),
+            file_name="TCN_Equipment_Analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            icon=":material/table_view:", type="primary",
+            use_container_width=True, key="ea_gen_xlsx",
         )
     with g2:
         st.download_button(
-            "📄 Download CSV", edf[rep_cols].to_csv(index=False).encode(),
-            "TCN_Equipment_Analysis.csv", "text/csv",
-            use_container_width=True, key="ea_gen_csv",
+            "Download CSV", data=edf[rep_cols].to_csv(index=False).encode(),
+            file_name="TCN_Equipment_Analysis.csv", mime="text/csv",
+            icon=":material/description:", use_container_width=True, key="ea_gen_csv",
         )
 
 
@@ -1618,7 +1800,7 @@ def show_hierarchy(df):
             for ts in sorted(sr["Transmission Station"].dropna().unique()):
                 subs = sr[sr["Transmission Station"] == ts]["Sub-Station"].dropna().tolist()
                 n_out = int(outage_by_sub.filter(like=ts.split()[0]).sum()) if len(ts.split()) else 0
-                st.markdown(f"**⚡ {ts}**" + (f" · `{n_out} outages`" if n_out else ""))
+                st.markdown(f":material/bolt: **{ts}**" + (f" · `{n_out} outages`" if n_out else ""))
                 for s in subs:
                     if s and s.lower() != "nan":
                         st.markdown(f"&nbsp;&nbsp;&nbsp;└ {s}")
@@ -1799,7 +1981,7 @@ def show_export(df):
         dmin = df["Datetime_Off"].min()
         dmax = df["Datetime_Off"].max()
         export_range = st.date_input(
-            "📅 Export Date Range",
+            ":material/calendar_month: Export Date Range",
             value=(dmin.date(), dmax.date()) if pd.notna(dmin) else (),
             key="exp_date",
         )
@@ -1977,7 +2159,7 @@ def main():
         st.info("The outage database is empty. Run `python migrate_to_supabase.py` to import "
                 "the existing records, or upload a compiled workbook below.")
         if user["role"] == "admin":
-            up_tab, users_tab = st.tabs(["📁 Upload Data", "👥 Users"])
+            up_tab, users_tab = st.tabs([":material/upload_file: Upload Data", ":material/group: Users"])
             with up_tab:
                 show_upload()
             with users_tab:
@@ -1988,10 +2170,17 @@ def main():
 
     filtered = sidebar_filters(df, user)
 
-    tab_names = ["⚡ Dashboard", "🗂️ Records", "🌍 Region Analysis", "🔧 Equipment Analysis",
-                 "📝 Report Outage", "🗼 Network Hierarchy", "📤 Export"]
+    tab_names = [
+        ":material/space_dashboard: Dashboard",
+        ":material/table_rows: Records",
+        ":material/public: Region Analysis",
+        ":material/electrical_services: Equipment Analysis",
+        ":material/edit_note: Report Outage",
+        ":material/account_tree: Network Hierarchy",
+        ":material/download: Export",
+    ]
     if user["role"] == "admin":
-        tab_names += ["📁 Upload Data", "👥 Users"]
+        tab_names += [":material/upload_file: Upload Data", ":material/group: Users"]
     tabs = st.tabs(tab_names)
 
     with tabs[0]:
